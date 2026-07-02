@@ -17,9 +17,12 @@ API_TOKEN="${API_TOKEN:-}"
 SYNC_INTERVAL="${SYNC_INTERVAL:-30}"
 BLOCK_DNS="${BLOCK_DNS:-1}"
 BLOCK_DOT="${BLOCK_DOT:-1}"
+WG_EASY_CONTAINER="${WG_EASY_CONTAINER:-}"
+DOCKER_DNS_IP="${DOCKER_DNS_IP:-172.17.0.1}"
 
 NAT_CHAIN="WG_CAPTIVE_NAT"
 FILTER_CHAIN="WG_CAPTIVE_FILTER"
+NETNS_PID=""
 
 usage() {
   cat <<'EOF'
@@ -46,22 +49,51 @@ require_config() {
   [[ -n "$PORTAL_IP" ]] || die "PORTAL_IP is required"
 }
 
+resolve_netns() {
+  NETNS_PID=""
+  if [[ -n "$WG_EASY_CONTAINER" && "$WG_EASY_CONTAINER" != "host" ]]; then
+    command -v docker >/dev/null 2>&1 || die "docker is required when WG_EASY_CONTAINER is set"
+    command -v nsenter >/dev/null 2>&1 || die "nsenter is required when WG_EASY_CONTAINER is set; install util-linux"
+    NETNS_PID="$(docker inspect -f '{{.State.Pid}}' "$WG_EASY_CONTAINER" 2>/dev/null || true)"
+    [[ -n "$NETNS_PID" && "$NETNS_PID" != "0" ]] || die "container '$WG_EASY_CONTAINER' is not running"
+  fi
+}
+
+net_exec() {
+  if [[ -n "$NETNS_PID" ]]; then
+    nsenter -t "$NETNS_PID" -n "$@"
+  else
+    "$@"
+  fi
+}
+
+ipt() {
+  net_exec iptables "$@"
+}
+
+ips() {
+  net_exec ipset "$@"
+}
+
 ensure_tools() {
-  command -v iptables >/dev/null 2>&1 || die "iptables is required"
-  command -v ipset >/dev/null 2>&1 || die "ipset is required"
+  command -v iptables >/dev/null 2>&1 || die "iptables is required on host"
+  command -v ipset >/dev/null 2>&1 || die "ipset is required on host"
+  resolve_netns
+  net_exec iptables -V >/dev/null 2>&1 || die "iptables cannot run in target network namespace"
+  net_exec ipset -V >/dev/null 2>&1 || die "ipset cannot run in target network namespace"
 }
 
 iptables_has_rule() {
   local table="$1"
   shift
-  iptables -t "$table" -C "$@" >/dev/null 2>&1
+  ipt -t "$table" -C "$@" >/dev/null 2>&1
 }
 
 iptables_append_once() {
   local table="$1"
   shift
   if ! iptables_has_rule "$table" "$@"; then
-    iptables -t "$table" -A "$@"
+    ipt -t "$table" -A "$@"
   fi
 }
 
@@ -69,20 +101,20 @@ iptables_insert_once() {
   local table="$1"
   shift
   if ! iptables_has_rule "$table" "$@"; then
-    iptables -t "$table" -I "$@"
+    ipt -t "$table" -I "$@"
   fi
 }
 
 ensure_chain() {
   local table="$1"
   local chain="$2"
-  if ! iptables -t "$table" -nL "$chain" >/dev/null 2>&1; then
-    iptables -t "$table" -N "$chain"
+  if ! ipt -t "$table" -nL "$chain" >/dev/null 2>&1; then
+    ipt -t "$table" -N "$chain"
   fi
 }
 
 ensure_firewall() {
-  ipset create "$IPSET_NAME" hash:ip -exist
+  ips create "$IPSET_NAME" hash:ip -exist
 
   ensure_chain nat "$NAT_CHAIN"
   ensure_chain filter "$FILTER_CHAIN"
@@ -90,25 +122,29 @@ ensure_firewall() {
   iptables_append_once nat PREROUTING -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN"
   iptables_insert_once filter FORWARD -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$FILTER_CHAIN"
 
-  iptables -t nat -F "$NAT_CHAIN"
-  iptables -t filter -F "$FILTER_CHAIN"
+  ipt -t nat -F "$NAT_CHAIN"
+  ipt -t filter -F "$FILTER_CHAIN"
 
-  iptables -t nat -A "$NAT_CHAIN" -p tcp --dport 80 -j DNAT --to-destination "${PORTAL_IP}:80"
+  ipt -t nat -A "$NAT_CHAIN" -p tcp --dport 80 -j DNAT --to-destination "${PORTAL_IP}:80"
 
-  iptables -t filter -A "$FILTER_CHAIN" -d "$PORTAL_IP" -p tcp --dport 80 -j ACCEPT
-  iptables -t filter -A "$FILTER_CHAIN" -d "$PORTAL_IP" -p tcp --dport 443 -j ACCEPT
+  ipt -t filter -A "$FILTER_CHAIN" -d "$PORTAL_IP" -p tcp --dport 80 -j ACCEPT
+  ipt -t filter -A "$FILTER_CHAIN" -d "$PORTAL_IP" -p tcp --dport 443 -j ACCEPT
+
+  if [[ -n "$DOCKER_DNS_IP" ]]; then
+    ipt -t filter -A "$FILTER_CHAIN" -d "$DOCKER_DNS_IP" -j REJECT
+  fi
 
   if [[ "$BLOCK_DNS" == "1" ]]; then
-    iptables -t filter -A "$FILTER_CHAIN" -p udp --dport 53 -j REJECT
-    iptables -t filter -A "$FILTER_CHAIN" -p tcp --dport 53 -j REJECT
+    ipt -t filter -A "$FILTER_CHAIN" -p udp --dport 53 -j REJECT
+    ipt -t filter -A "$FILTER_CHAIN" -p tcp --dport 53 -j REJECT
   fi
 
   if [[ "$BLOCK_DOT" == "1" ]]; then
-    iptables -t filter -A "$FILTER_CHAIN" -p tcp --dport 853 -j REJECT
+    ipt -t filter -A "$FILTER_CHAIN" -p tcp --dport 853 -j REJECT
   fi
 
-  iptables -t filter -A "$FILTER_CHAIN" -p tcp --dport 443 -j REJECT
-  iptables -t filter -A "$FILTER_CHAIN" -j REJECT
+  ipt -t filter -A "$FILTER_CHAIN" -p tcp --dport 443 -j REJECT
+  ipt -t filter -A "$FILTER_CHAIN" -j REJECT
 }
 
 extract_ips() {
@@ -145,46 +181,51 @@ fetch_expired_ips() {
 sync_ipset() {
   local tmp_set="${IPSET_NAME}_next"
 
-  ipset create "$IPSET_NAME" hash:ip -exist
-  ipset create "$tmp_set" hash:ip -exist
-  ipset flush "$tmp_set"
+  ips create "$IPSET_NAME" hash:ip -exist
+  ips create "$tmp_set" hash:ip -exist
+  ips flush "$tmp_set"
 
   while IFS= read -r ip; do
-    [[ -n "$ip" ]] && ipset add "$tmp_set" "$ip" -exist
+    [[ -n "$ip" ]] && ips add "$tmp_set" "$ip" -exist
   done < <(fetch_expired_ips)
 
-  ipset swap "$tmp_set" "$IPSET_NAME"
-  ipset destroy "$tmp_set" >/dev/null 2>&1 || true
+  ips swap "$tmp_set" "$IPSET_NAME"
+  ips destroy "$tmp_set" >/dev/null 2>&1 || true
 }
 
 cleanup() {
-  iptables -t nat -D PREROUTING -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN" >/dev/null 2>&1 || true
-  iptables -t filter -D FORWARD -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$FILTER_CHAIN" >/dev/null 2>&1 || true
+  resolve_netns
+  ipt -t nat -D PREROUTING -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN" >/dev/null 2>&1 || true
+  ipt -t filter -D FORWARD -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$FILTER_CHAIN" >/dev/null 2>&1 || true
 
-  if iptables -t nat -nL "$NAT_CHAIN" >/dev/null 2>&1; then
-    iptables -t nat -F "$NAT_CHAIN"
-    iptables -t nat -X "$NAT_CHAIN"
+  if ipt -t nat -nL "$NAT_CHAIN" >/dev/null 2>&1; then
+    ipt -t nat -F "$NAT_CHAIN"
+    ipt -t nat -X "$NAT_CHAIN"
   fi
 
-  if iptables -t filter -nL "$FILTER_CHAIN" >/dev/null 2>&1; then
-    iptables -t filter -F "$FILTER_CHAIN"
-    iptables -t filter -X "$FILTER_CHAIN"
+  if ipt -t filter -nL "$FILTER_CHAIN" >/dev/null 2>&1; then
+    ipt -t filter -F "$FILTER_CHAIN"
+    ipt -t filter -X "$FILTER_CHAIN"
   fi
 
-  ipset destroy "$IPSET_NAME" >/dev/null 2>&1 || true
+  ips destroy "$IPSET_NAME" >/dev/null 2>&1 || true
 }
 
 status() {
+  resolve_netns
   echo "config: $CONFIG_FILE"
   echo "interface: $WG_INTERFACE"
   echo "ipset: $IPSET_NAME"
   echo "portal_ip: $PORTAL_IP"
+  echo "wg_easy_container: ${WG_EASY_CONTAINER:-host}"
+  echo "docker_dns_ip: ${DOCKER_DNS_IP:-disabled}"
+  echo "netns_pid: ${NETNS_PID:-host}"
   echo
-  ipset list "$IPSET_NAME" 2>/dev/null || true
+  ips list "$IPSET_NAME" 2>/dev/null || true
   echo
-  iptables -t nat -S "$NAT_CHAIN" 2>/dev/null || true
+  ipt -t nat -S "$NAT_CHAIN" 2>/dev/null || true
   echo
-  iptables -S "$FILTER_CHAIN" 2>/dev/null || true
+  ipt -S "$FILTER_CHAIN" 2>/dev/null || true
 }
 
 sync_once() {

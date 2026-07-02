@@ -24,3 +24,4 @@ echo "Edit /etc/wg-captive-agent.env, then run:"
 echo "  systemctl enable --now wg-captive-agent"
 echo "  systemctl enable --now wg-captive-admin"
 
+

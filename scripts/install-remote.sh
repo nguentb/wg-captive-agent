@@ -29,9 +29,9 @@ fi
 if command -v apt-get >/dev/null 2>&1; then
   log "Installing dependencies with apt-get"
   apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y iptables ipset curl tar nodejs ca-certificates
+  DEBIAN_FRONTEND=noninteractive apt-get install -y iptables ipset curl tar nodejs ca-certificates util-linux
 else
-  log "apt-get not found; assuming iptables, ipset, curl, tar and nodejs are already installed"
+  log "apt-get not found; assuming iptables, ipset, curl, tar, nodejs and nsenter are already installed"
 fi
 
 command -v curl >/dev/null 2>&1 || fail "curl is required"
@@ -61,3 +61,4 @@ log "Installed successfully"
 log "Edit config: nano /etc/wg-captive-agent.env"
 log "Admin UI: http://${SERVER_IP:-SERVER_IP}:${ADMIN_PORT}"
 log "IMPORTANT: change ADMIN_PASSWORD before exposing the admin UI"
+

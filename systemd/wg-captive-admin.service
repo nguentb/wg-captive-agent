@@ -1,7 +1,7 @@
 [Unit]
 Description=WireGuard captive admin web UI
-After=network-online.target
-Wants=network-online.target
+After=network-online.target docker.service
+Wants=network-online.target docker.service
 
 [Service]
 Type=simple
@@ -12,3 +12,4 @@ RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
+

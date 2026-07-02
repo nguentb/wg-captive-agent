@@ -37,7 +37,7 @@ WireGuard server + wg-captive-agent
 ## Yeu cau server
 
 - Linux server chay WireGuard/wg-easy.
-- `iptables`, `ipset`, `curl`, `tar`.
+- `iptables`, `ipset`, `curl`, `tar`, `nsenter` tu goi `util-linux`.
 - `nodejs` cho web admin.
 - Quyen root.
 
@@ -45,7 +45,7 @@ Ubuntu/Debian:
 
 ```bash
 sudo apt update
-sudo apt install -y iptables ipset curl tar nodejs
+sudo apt install -y iptables ipset curl tar nodejs util-linux
 ```
 
 ## Cai dat nhanh
@@ -84,6 +84,9 @@ IPSET_NAME=wg_expired
 PORTAL_IP=203.0.113.10
 EXPIRED_FILE=/etc/wg-captive-expired.txt
 WG_EASY_JSON=/etc/wireguard/wg0.json
+WG_EASY_CONTAINER=wg-easy
+WG_EASY_CONTAINER_JSON=/etc/wireguard/wg0.json
+DOCKER_DNS_IP=172.17.0.1
 
 SERVER_NAME=wg-server-01
 SERVER_PUBLIC_IP=203.0.113.20
@@ -115,7 +118,7 @@ Tab `Clients`:
 
 Tab `Settings`:
 
-- Cai dat `PORTAL_IP`, ten server, IP server, duong dan `wg0.json`, file blocked IP.
+- Cai dat `PORTAL_IP`, ten server, IP server, duong dan `wg0.json`, container `wg-easy`, DNS IP Docker, file blocked IP.
 - Cai dat Telegram bot token/chat ID.
 - Bat/tat gui backup len Telegram.
 - Bat/tat auto backup theo cac moc gio trong ngay, vi du `02:00,14:00`.
@@ -204,6 +207,7 @@ sudo journalctl -u wg-captive-admin -f
 - Repo nay khong tao portal nap tien cho khach hang.
 - `PORTAL_IP` la public IP cua portal ben ngoai.
 - Router da cau hinh DoT van xu ly duoc bang cach chan TCP 853 khi het han.
-- Web admin can quyen doc/ghi `WG_EASY_JSON`, `EXPIRED_FILE`, `BACKUP_DIR` va chay `wg-captive-agent sync`.
+- Web admin can quyen doc `WG_EASY_JSON` hoac docker exec vao `WG_EASY_CONTAINER`, ghi `EXPIRED_FILE`, `BACKUP_DIR` va chay `wg-captive-agent sync`.
 - Auto pop-up khong the dam bao 100% tren moi OS/thiet bi, nhung day la co che dung nhat khi khong can thiep router/client.
+
 
