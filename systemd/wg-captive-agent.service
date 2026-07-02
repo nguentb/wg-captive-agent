@@ -1,0 +1,15 @@
+[Unit]
+Description=WireGuard captive firewall agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/wg-captive-agent.env
+ExecStart=/usr/local/sbin/wg-captive-agent run
+ExecStopPost=/usr/local/sbin/wg-captive-agent cleanup
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

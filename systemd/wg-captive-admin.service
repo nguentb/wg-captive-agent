@@ -1,0 +1,14 @@
+[Unit]
+Description=WireGuard captive admin web UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/wg-captive-agent.env
+ExecStart=/usr/bin/node /usr/local/lib/wg-captive-agent/wg-captive-admin.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

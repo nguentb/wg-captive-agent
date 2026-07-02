@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_FILE="${CONFIG_FILE:-/etc/wg-captive-agent.env}"
+
+if [[ -f "$CONFIG_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+fi
+
+WG_INTERFACE="${WG_INTERFACE:-wg0}"
+IPSET_NAME="${IPSET_NAME:-wg_expired}"
+PORTAL_IP="${PORTAL_IP:-}"
+EXPIRED_FILE="${EXPIRED_FILE:-}"
+EXPIRED_URL="${EXPIRED_URL:-}"
+API_TOKEN="${API_TOKEN:-}"
+SYNC_INTERVAL="${SYNC_INTERVAL:-30}"
+BLOCK_DNS="${BLOCK_DNS:-1}"
+BLOCK_DOT="${BLOCK_DOT:-1}"
+
+NAT_CHAIN="WG_CAPTIVE_NAT"
+FILTER_CHAIN="WG_CAPTIVE_FILTER"
+
+usage() {
+  cat <<'EOF'
+Usage: wg-captive-agent [run|sync|cleanup|status]
+
+Commands:
+  run      Sync expired peers in a loop and keep firewall rules installed.
+  sync     Sync expired peers once and install firewall rules.
+  cleanup  Remove wg-captive-agent iptables chains and ipset.
+  status   Print current ipset and firewall chain status.
+EOF
+}
+
+die() {
+  echo "wg-captive-agent: $*" >&2
+  exit 1
+}
+
+require_root() {
+  [[ "${EUID}" -eq 0 ]] || die "must run as root"
+}
+
+require_config() {
+  [[ -n "$PORTAL_IP" ]] || die "PORTAL_IP is required"
+}
+
+ensure_tools() {
+  command -v iptables >/dev/null 2>&1 || die "iptables is required"
+  command -v ipset >/dev/null 2>&1 || die "ipset is required"
+}
+
+iptables_has_rule() {
+  local table="$1"
+  shift
+  iptables -t "$table" -C "$@" >/dev/null 2>&1
+}
+
+iptables_append_once() {
+  local table="$1"
+  shift
+  if ! iptables_has_rule "$table" "$@"; then
+    iptables -t "$table" -A "$@"
+  fi
+}
+
+iptables_insert_once() {
+  local table="$1"
+  shift
+  if ! iptables_has_rule "$table" "$@"; then
+    iptables -t "$table" -I "$@"
+  fi
+}
+
+ensure_chain() {
+  local table="$1"
+  local chain="$2"
+  if ! iptables -t "$table" -nL "$chain" >/dev/null 2>&1; then
+    iptables -t "$table" -N "$chain"
+  fi
+}
+
+ensure_firewall() {
+  ipset create "$IPSET_NAME" hash:ip -exist
+
+  ensure_chain nat "$NAT_CHAIN"
+  ensure_chain filter "$FILTER_CHAIN"
+
+  iptables_append_once nat PREROUTING -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN"
+  iptables_insert_once filter FORWARD -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$FILTER_CHAIN"
+
+  iptables -t nat -F "$NAT_CHAIN"
+  iptables -t filter -F "$FILTER_CHAIN"
+
+  iptables -t nat -A "$NAT_CHAIN" -p tcp --dport 80 -j DNAT --to-destination "${PORTAL_IP}:80"
+
+  iptables -t filter -A "$FILTER_CHAIN" -d "$PORTAL_IP" -p tcp --dport 80 -j ACCEPT
+  iptables -t filter -A "$FILTER_CHAIN" -d "$PORTAL_IP" -p tcp --dport 443 -j ACCEPT
+
+  if [[ "$BLOCK_DNS" == "1" ]]; then
+    iptables -t filter -A "$FILTER_CHAIN" -p udp --dport 53 -j REJECT
+    iptables -t filter -A "$FILTER_CHAIN" -p tcp --dport 53 -j REJECT
+  fi
+
+  if [[ "$BLOCK_DOT" == "1" ]]; then
+    iptables -t filter -A "$FILTER_CHAIN" -p tcp --dport 853 -j REJECT
+  fi
+
+  iptables -t filter -A "$FILTER_CHAIN" -p tcp --dport 443 -j REJECT
+  iptables -t filter -A "$FILTER_CHAIN" -j REJECT
+}
+
+extract_ips() {
+  sed -nE 's/.*(([0-9]{1,3}\.){3}[0-9]{1,3}).*/\1/p' | awk '
+    function valid(ip, parts, i) {
+      split(ip, parts, ".")
+      for (i = 1; i <= 4; i++) {
+        if (parts[i] < 0 || parts[i] > 255) return 0
+      }
+      return 1
+    }
+    valid($1) { print $1 }
+  ' | sort -u
+}
+
+fetch_expired_ips() {
+  if [[ -n "$EXPIRED_URL" ]]; then
+    if [[ -n "$API_TOKEN" ]]; then
+      curl -fsS -H "Authorization: Bearer ${API_TOKEN}" "$EXPIRED_URL" | extract_ips
+    else
+      curl -fsS "$EXPIRED_URL" | extract_ips
+    fi
+    return
+  fi
+
+  if [[ -n "$EXPIRED_FILE" && -f "$EXPIRED_FILE" ]]; then
+    extract_ips < "$EXPIRED_FILE"
+    return
+  fi
+
+  true
+}
+
+sync_ipset() {
+  local tmp_set="${IPSET_NAME}_next"
+
+  ipset create "$IPSET_NAME" hash:ip -exist
+  ipset create "$tmp_set" hash:ip -exist
+  ipset flush "$tmp_set"
+
+  while IFS= read -r ip; do
+    [[ -n "$ip" ]] && ipset add "$tmp_set" "$ip" -exist
+  done < <(fetch_expired_ips)
+
+  ipset swap "$tmp_set" "$IPSET_NAME"
+  ipset destroy "$tmp_set" >/dev/null 2>&1 || true
+}
+
+cleanup() {
+  iptables -t nat -D PREROUTING -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN" >/dev/null 2>&1 || true
+  iptables -t filter -D FORWARD -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$FILTER_CHAIN" >/dev/null 2>&1 || true
+
+  if iptables -t nat -nL "$NAT_CHAIN" >/dev/null 2>&1; then
+    iptables -t nat -F "$NAT_CHAIN"
+    iptables -t nat -X "$NAT_CHAIN"
+  fi
+
+  if iptables -t filter -nL "$FILTER_CHAIN" >/dev/null 2>&1; then
+    iptables -t filter -F "$FILTER_CHAIN"
+    iptables -t filter -X "$FILTER_CHAIN"
+  fi
+
+  ipset destroy "$IPSET_NAME" >/dev/null 2>&1 || true
+}
+
+status() {
+  echo "config: $CONFIG_FILE"
+  echo "interface: $WG_INTERFACE"
+  echo "ipset: $IPSET_NAME"
+  echo "portal_ip: $PORTAL_IP"
+  echo
+  ipset list "$IPSET_NAME" 2>/dev/null || true
+  echo
+  iptables -t nat -S "$NAT_CHAIN" 2>/dev/null || true
+  echo
+  iptables -S "$FILTER_CHAIN" 2>/dev/null || true
+}
+
+sync_once() {
+  require_root
+  require_config
+  ensure_tools
+  ensure_firewall
+  sync_ipset
+}
+
+run_loop() {
+  sync_once
+  while true; do
+    sleep "$SYNC_INTERVAL"
+    sync_once
+  done
+}
+
+main() {
+  local command="${1:-run}"
+
+  case "$command" in
+    run)
+      run_loop
+      ;;
+    sync)
+      sync_once
+      ;;
+    cleanup)
+      require_root
+      ensure_tools
+      cleanup
+      ;;
+    status)
+      status
+      ;;
+    -h|--help|help)
+      usage
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"
