@@ -48,10 +48,22 @@ sudo apt update
 sudo apt install -y iptables ipset curl tar nodejs
 ```
 
-## Cai dat
+## Cai dat nhanh
 
 ```bash
-git clone https://github.com/your-org/wg-captive-agent.git
+curl -fsSL https://raw.githubusercontent.com/nguentb/wg-captive-agent/master/scripts/install-remote.sh | sudo bash
+```
+
+Neu repo dung branch `main`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nguentb/wg-captive-agent/main/scripts/install-remote.sh | sudo WG_CAPTIVE_BRANCH=main bash
+```
+
+## Cai dat thu cong
+
+```bash
+git clone https://github.com/nguentb/wg-captive-agent.git
 cd wg-captive-agent
 chmod +x bin/wg-captive-agent install.sh uninstall.sh
 sudo ./install.sh
@@ -200,4 +212,5 @@ sudo journalctl -u wg-captive-admin -f
 - Router da cau hinh DoT van xu ly duoc bang cach chan TCP 853 khi het han.
 - Web admin can quyen doc/ghi `WG_EASY_JSON`, `EXPIRED_FILE`, `BACKUP_DIR` va chay `wg-captive-agent sync`.
 - Auto pop-up khong the dam bao 100% tren moi OS/thiet bi, nhung day la co che dung nhat khi khong can thiep router/client.
+
 
