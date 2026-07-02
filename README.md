@@ -99,13 +99,14 @@ AUTO_BACKUP_ENABLED=0
 AUTO_BACKUP_TIMES=02:00,14:00
 
 SYNC_INTERVAL=30
-BLOCK_DNS=1
-BLOCK_DOT=1
+BLOCK_DNS=0
+BLOCK_DOT=0
 
 ADMIN_HOST=0.0.0.0
 ADMIN_PORT=51822
 ADMIN_PASSWORD=change-this-password
 ```
+Luu y captive popup: nen de `BLOCK_DNS=0` va `BLOCK_DOT=0` de thiet bi resolve duoc cac domain kiem tra captive nhu `captive.apple.com`, `connectivitycheck.gstatic.com`, `neverssl.com`. Agent van chan web/traffic sau do bang firewall; DNS chi duoc mo de popup co co hoi kich hoat.
 
 ## Web admin
 

@@ -15,8 +15,8 @@ EXPIRED_FILE="${EXPIRED_FILE:-}"
 EXPIRED_URL="${EXPIRED_URL:-}"
 API_TOKEN="${API_TOKEN:-}"
 SYNC_INTERVAL="${SYNC_INTERVAL:-30}"
-BLOCK_DNS="${BLOCK_DNS:-1}"
-BLOCK_DOT="${BLOCK_DOT:-1}"
+BLOCK_DNS="${BLOCK_DNS:-0}"
+BLOCK_DOT="${BLOCK_DOT:-0}"
 WG_EASY_CONTAINER="${WG_EASY_CONTAINER:-}"
 DOCKER_DNS_IP="${DOCKER_DNS_IP:-172.17.0.1}"
 
@@ -132,17 +132,18 @@ ensure_firewall() {
   ipt -t filter -A "$FILTER_CHAIN" -d "$PORTAL_IP" -p tcp --dport 80 -j ACCEPT
   ipt -t filter -A "$FILTER_CHAIN" -d "$PORTAL_IP" -p tcp --dport 443 -j ACCEPT
 
-  if [[ -n "$DOCKER_DNS_IP" ]]; then
-    ipt -t filter -A "$FILTER_CHAIN" -d "$DOCKER_DNS_IP" -j REJECT
-  fi
-
   if [[ "$BLOCK_DNS" == "1" ]]; then
     ipt -t filter -A "$FILTER_CHAIN" -p udp --dport 53 -j REJECT
     ipt -t filter -A "$FILTER_CHAIN" -p tcp --dport 53 -j REJECT
+  else
+    ipt -t filter -A "$FILTER_CHAIN" -p udp --dport 53 -j ACCEPT
+    ipt -t filter -A "$FILTER_CHAIN" -p tcp --dport 53 -j ACCEPT
   fi
 
   if [[ "$BLOCK_DOT" == "1" ]]; then
     ipt -t filter -A "$FILTER_CHAIN" -p tcp --dport 853 -j REJECT
+  else
+    ipt -t filter -A "$FILTER_CHAIN" -p tcp --dport 853 -j ACCEPT
   fi
 
   ipt -t filter -A "$FILTER_CHAIN" -p tcp --dport 443 -j REJECT
