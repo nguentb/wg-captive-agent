@@ -104,14 +104,15 @@ function valuesFromObjectOrArray(value) {
 
 function readWgEasyJson(config) {
   const file = wgEasyFilePath(config);
-  if (fs.existsSync(file)) return fs.readFileSync(file, "utf8");
   if (wgEasyContainer(config)) {
     try {
       return execFileSync("docker", ["exec", wgEasyContainer(config), "cat", wgEasyContainerJson(config)], { encoding: "utf8", timeout: 5000 });
     } catch {
+      if (fs.existsSync(file)) return fs.readFileSync(file, "utf8");
       return "";
     }
   }
+  if (fs.existsSync(file)) return fs.readFileSync(file, "utf8");
   return "";
 }
 
