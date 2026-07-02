@@ -120,7 +120,9 @@ ensure_firewall() {
   ensure_chain filter "$FILTER_CHAIN"
 
   iptables_append_once nat PREROUTING -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN"
+  iptables_append_once nat PREROUTING -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN"
   iptables_insert_once filter FORWARD -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$FILTER_CHAIN"
+  iptables_insert_once filter FORWARD -m set --match-set "$IPSET_NAME" src -j "$FILTER_CHAIN"
 
   ipt -t nat -F "$NAT_CHAIN"
   ipt -t filter -F "$FILTER_CHAIN"
@@ -196,7 +198,9 @@ sync_ipset() {
 cleanup() {
   resolve_netns
   ipt -t nat -D PREROUTING -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN" >/dev/null 2>&1 || true
+  ipt -t nat -D PREROUTING -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN" >/dev/null 2>&1 || true
   ipt -t filter -D FORWARD -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$FILTER_CHAIN" >/dev/null 2>&1 || true
+  ipt -t filter -D FORWARD -m set --match-set "$IPSET_NAME" src -j "$FILTER_CHAIN" >/dev/null 2>&1 || true
 
   if ipt -t nat -nL "$NAT_CHAIN" >/dev/null 2>&1; then
     ipt -t nat -F "$NAT_CHAIN"
@@ -223,8 +227,10 @@ status() {
   echo
   ips list "$IPSET_NAME" 2>/dev/null || true
   echo
+  ipt -t nat -S PREROUTING 2>/dev/null | grep "$NAT_CHAIN" || true
   ipt -t nat -S "$NAT_CHAIN" 2>/dev/null || true
   echo
+  ipt -S FORWARD 2>/dev/null | grep "$FILTER_CHAIN" || true
   ipt -S "$FILTER_CHAIN" 2>/dev/null || true
 }
 
