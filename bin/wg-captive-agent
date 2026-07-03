@@ -31,7 +31,7 @@ NETNS_PID=""
 
 usage() {
   cat <<'EOF'
-Usage: wg-captive-agent [run|sync|cleanup|status|relay-on|relay-off|relay-status|relay-tunnel-up|relay-tunnel-down|relay-restart|relay-restore]
+Usage: wg-captive-agent [run|sync|cleanup|status|relay-enable|relay-disable|relay-on|relay-off|relay-status|relay-tunnel-up|relay-tunnel-down|relay-restart|relay-restore]
 
 Commands:
   run      Sync expired peers in a loop and keep firewall rules installed.
@@ -241,6 +241,16 @@ relay_restore() {
   fi
 }
 
+relay_enable() {
+  relay_tunnel_up
+  relay_route_on
+}
+
+relay_disable() {
+  relay_route_off
+  relay_tunnel_down
+}
+
 relay_status() {
   echo "relay_config: $RELAY_EXIT_CONF"
   echo "relay_imported: $([[ -f "$RELAY_EXIT_CONF" ]] && echo yes || echo no)"
@@ -403,6 +413,14 @@ main() {
     relay-restart)
       require_root
       relay_restart
+      ;;
+    relay-enable)
+      require_root
+      relay_enable
+      ;;
+    relay-disable)
+      require_root
+      relay_disable
       ;;
     relay-on)
       require_root
