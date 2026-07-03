@@ -10,7 +10,7 @@ Captive firewall agent cho cac WireGuard/wg-easy server, kem web admin de quan l
 - Redirect HTTP port 80 cua router bi khoa ve `PORTAL_IP:80`.
 - Cho phep router bi khoa truy cap `PORTAL_IP:80` va `PORTAL_IP:443`.
 - Chan HTTPS toi noi khac, DNS-over-TLS `853`, DNS thuong `53` va traffic con lai.
-- Tab Settings de cau hinh portal IP, Telegram backup, auto backup theo gio.
+- Tab Settings de cau hinh portal IP, relay client subnet, Telegram backup, auto backup theo gio.
 - Backup local `.tar.gz` gom dung cac file: `blocked-ips`, `metadata`, `wg0`.
 - Gui backup len Telegram ngay sau khi tao neu da cau hinh bot token/chat ID.
 - Restore tu file backup upload len web admin.
@@ -136,7 +136,7 @@ Tab `Relay`:
 
 Tab `Settings`:
 
-- Cai dat `PORTAL_IP`, ten server, IP server, duong dan `wg0.json`, container `wg-easy`, DNS IP Docker, file blocked IP.
+- Cai dat `PORTAL_IP`, `SERVER_PUBLIC_IP` va `RELAY_CLIENT_SUBNET` cho relay route, mac dinh `10.8.0.0/24`.
 - Cai dat Telegram bot token/chat ID.
 - Bat/tat gui backup len Telegram.
 - Bat/tat auto backup theo cac moc gio trong ngay, vi du `02:00,14:00`.
