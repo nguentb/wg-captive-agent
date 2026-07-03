@@ -16,6 +16,7 @@ fi
 
 install -m 0644 systemd/wg-captive-agent.service /etc/systemd/system/wg-captive-agent.service
 install -m 0644 systemd/wg-captive-admin.service /etc/systemd/system/wg-captive-admin.service
+install -m 0644 systemd/wg-captive-relay-restore.service /etc/systemd/system/wg-captive-relay-restore.service
 
 systemctl daemon-reload
 
@@ -23,5 +24,6 @@ echo "Installed wg-captive-agent."
 echo "Edit /etc/wg-captive-agent.env, then run:"
 echo "  systemctl enable --now wg-captive-agent"
 echo "  systemctl enable --now wg-captive-admin"
+echo "  systemctl enable wg-captive-relay-restore"
 
 

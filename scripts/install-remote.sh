@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO="${WG_CAPTIVE_REPO:-nguentb/wg-captive-agent}"
-BRANCH="${WG_CAPTIVE_BRANCH:-master}"
+BRANCH="${WG_CAPTIVE_BRANCH:-main}"
 TARBALL_URL="${WG_CAPTIVE_TARBALL_URL:-https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz}"
 TMP_DIR=""
 
@@ -29,7 +29,7 @@ fi
 if command -v apt-get >/dev/null 2>&1; then
   log "Installing dependencies with apt-get"
   apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y iptables ipset curl tar nodejs ca-certificates util-linux
+  DEBIAN_FRONTEND=noninteractive apt-get install -y iptables ipset curl tar nodejs ca-certificates util-linux wireguard-tools
 else
   log "apt-get not found; assuming iptables, ipset, curl, tar, nodejs and nsenter are already installed"
 fi
@@ -52,6 +52,7 @@ log "Installing wg-captive-agent"
 
 systemctl enable --now wg-captive-agent
 systemctl enable --now wg-captive-admin
+systemctl enable wg-captive-relay-restore
 
 SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 ADMIN_PORT="$(grep -E '^ADMIN_PORT=' /etc/wg-captive-agent.env 2>/dev/null | tail -n 1 | cut -d= -f2-)"

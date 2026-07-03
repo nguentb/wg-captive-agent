@@ -4,14 +4,18 @@ set -euo pipefail
 if command -v systemctl >/dev/null 2>&1; then
   systemctl disable --now wg-captive-agent >/dev/null 2>&1 || true
   systemctl disable --now wg-captive-admin >/dev/null 2>&1 || true
+  systemctl disable --now wg-captive-relay-restore >/dev/null 2>&1 || true
 fi
 
 if [[ -x /usr/local/sbin/wg-captive-agent ]]; then
+  /usr/local/sbin/wg-captive-agent relay-off || true
+  /usr/local/sbin/wg-captive-agent relay-tunnel-down || true
   /usr/local/sbin/wg-captive-agent cleanup || true
 fi
 
 rm -f /etc/systemd/system/wg-captive-agent.service
 rm -f /etc/systemd/system/wg-captive-admin.service
+rm -f /etc/systemd/system/wg-captive-relay-restore.service
 rm -f /usr/local/sbin/wg-captive-agent
 rm -rf /usr/local/lib/wg-captive-agent
 

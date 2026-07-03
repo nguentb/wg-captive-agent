@@ -14,6 +14,7 @@ Captive firewall agent cho cac WireGuard/wg-easy server, kem web admin de quan l
 - Backup local `.tar.gz` gom dung cac file: `blocked-ips`, `metadata`, `wg0`.
 - Gui backup len Telegram ngay sau khi tao neu da cau hinh bot token/chat ID.
 - Restore tu file backup upload len web admin.
+- Tab Relay de import WireGuard `.conf` cua exit server, tao tunnel `wg-exit` trong container `wg-easy`, va route traffic client qua exit node.
 
 ## Mo hinh
 
@@ -45,7 +46,7 @@ Ubuntu/Debian:
 
 ```bash
 sudo apt update
-sudo apt install -y iptables ipset curl tar nodejs util-linux
+sudo apt install -y iptables ipset curl tar nodejs util-linux wireguard-tools
 ```
 
 ## Cai dat nhanh
@@ -64,6 +65,7 @@ sudo ./install.sh
 sudo nano /etc/wg-captive-agent.env
 sudo systemctl enable --now wg-captive-agent
 sudo systemctl enable --now wg-captive-admin
+sudo systemctl enable wg-captive-relay-restore
 ```
 
 Web admin mac dinh:
@@ -88,6 +90,13 @@ WG_EASY_CONTAINER=wg-easy
 WG_EASY_CONTAINER_JSON=/etc/wireguard/wg0.json
 DOCKER_DNS_IP=172.17.0.1
 
+RELAY_ENABLED=0
+RELAY_EXIT_IF=wg-exit
+RELAY_CLIENT_SUBNET=10.8.0.0/24
+RELAY_ROUTE_TABLE=200
+RELAY_EXIT_CONF=/etc/wg-captive-relay-exit.conf
+RELAY_ROUTE_FLAG=/etc/wg-captive-relay.enabled
+
 SERVER_NAME=wg-server-01
 SERVER_PUBLIC_IP=203.0.113.20
 BACKUP_DIR=/var/backups/wg-captive
@@ -110,12 +119,20 @@ Luu y captive popup: nen de `BLOCK_DNS=0` va `BLOCK_DOT=0` de thiet bi resolve d
 
 ## Web admin
 
-Tab `Clients`:
+Tab `Captive`:
 
 - Doc client tu `WG_EASY_JSON` cua wg-easy.
 - Hien thi ten, IP, trang thai `Allowed`/`Blocked`.
 - Switch ON: dua IP client vao `EXPIRED_FILE`, sync firewall.
 - Switch OFF: xoa IP client khoi `EXPIRED_FILE`, sync firewall.
+
+Tab `Relay`:
+
+- Import file WireGuard client config `.conf` cua exit server.
+- File import duoc tu dong them/thay `Table = off` trong `[Interface]` de tranh wg-quick doi default route cua container.
+- `Start tunnel`/`Stop tunnel`/`Restart tunnel` quan ly interface `wg-exit` trong container `wg-easy`.
+- `Enable route`/`Disable route` tao route policy: `ip rule from RELAY_CLIENT_SUBNET table RELAY_ROUTE_TABLE`, default route qua `wg-exit`, va NAT MASQUERADE.
+- Khi captive dang bat, chain captive van xu ly user bi khoa truoc; user active moi di qua relay route.
 
 Tab `Settings`:
 
@@ -196,6 +213,17 @@ Go bo rule:
 sudo wg-captive-agent cleanup
 ```
 
+Lenh relay:
+
+```bash
+sudo wg-captive-agent relay-status
+sudo wg-captive-agent relay-tunnel-up
+sudo wg-captive-agent relay-tunnel-down
+sudo wg-captive-agent relay-restart
+sudo wg-captive-agent relay-on
+sudo wg-captive-agent relay-off
+sudo wg-captive-agent relay-restore
+```
 Xem log:
 
 ```bash

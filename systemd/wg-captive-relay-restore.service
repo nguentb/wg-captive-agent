@@ -1,0 +1,12 @@
+[Unit]
+Description=Restore WireGuard captive relay route
+After=network-online.target docker.service wg-captive-agent.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/wg-captive-agent.env
+ExecStart=/usr/local/sbin/wg-captive-agent relay-restore
+
+[Install]
+WantedBy=multi-user.target

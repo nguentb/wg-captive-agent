@@ -19,6 +19,11 @@ BLOCK_DNS="${BLOCK_DNS:-0}"
 BLOCK_DOT="${BLOCK_DOT:-0}"
 WG_EASY_CONTAINER="${WG_EASY_CONTAINER:-}"
 DOCKER_DNS_IP="${DOCKER_DNS_IP:-172.17.0.1}"
+RELAY_EXIT_IF="${RELAY_EXIT_IF:-wg-exit}"
+RELAY_CLIENT_SUBNET="${RELAY_CLIENT_SUBNET:-10.8.0.0/24}"
+RELAY_ROUTE_TABLE="${RELAY_ROUTE_TABLE:-200}"
+RELAY_EXIT_CONF="${RELAY_EXIT_CONF:-/etc/wg-captive-relay-exit.conf}"
+RELAY_ROUTE_FLAG="${RELAY_ROUTE_FLAG:-/etc/wg-captive-relay.enabled}"
 
 NAT_CHAIN="WG_CAPTIVE_NAT"
 FILTER_CHAIN="WG_CAPTIVE_FILTER"
@@ -26,13 +31,14 @@ NETNS_PID=""
 
 usage() {
   cat <<'EOF'
-Usage: wg-captive-agent [run|sync|cleanup|status]
+Usage: wg-captive-agent [run|sync|cleanup|status|relay-on|relay-off|relay-status|relay-tunnel-up|relay-tunnel-down|relay-restart|relay-restore]
 
 Commands:
   run      Sync expired peers in a loop and keep firewall rules installed.
   sync     Sync expired peers once and install firewall rules.
   cleanup  Remove wg-captive-agent iptables chains and ipset.
   status   Print current ipset and firewall chain status.
+  relay-*  Manage relay tunnel and route inside wg-easy container.
 EOF
 }
 
@@ -150,6 +156,123 @@ ensure_firewall() {
   ipt -t filter -A "$FILTER_CHAIN" -j REJECT
 }
 
+
+relay_exec() {
+  if [[ -n "$WG_EASY_CONTAINER" && "$WG_EASY_CONTAINER" != "host" ]]; then
+    command -v docker >/dev/null 2>&1 || die "docker is required when WG_EASY_CONTAINER is set"
+    docker exec "$WG_EASY_CONTAINER" sh -c "$1"
+  else
+    sh -c "$1"
+  fi
+}
+
+relay_copy_conf() {
+  [[ -f "$RELAY_EXIT_CONF" ]] || die "relay config not found: $RELAY_EXIT_CONF"
+  install -d -m 0755 /etc/wireguard
+  install -m 0600 "$RELAY_EXIT_CONF" "/etc/wireguard/${RELAY_EXIT_IF}.conf"
+
+  if [[ -n "$WG_EASY_CONTAINER" && "$WG_EASY_CONTAINER" != "host" ]]; then
+    command -v docker >/dev/null 2>&1 || die "docker is required when WG_EASY_CONTAINER is set"
+    docker cp "/etc/wireguard/${RELAY_EXIT_IF}.conf" "$WG_EASY_CONTAINER:/etc/wireguard/${RELAY_EXIT_IF}.conf"
+    relay_exec "chmod 600 '/etc/wireguard/${RELAY_EXIT_IF}.conf'"
+  fi
+}
+
+relay_ensure_forward() {
+  sysctl -w net.ipv4.ip_forward=1 >/dev/null
+  echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-wg-captive-relay.conf
+  relay_exec "sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true"
+}
+
+relay_tunnel_up() {
+  relay_copy_conf
+  relay_exec "wg-quick down '$RELAY_EXIT_IF' 2>/dev/null || true"
+  relay_exec "wg-quick up '$RELAY_EXIT_IF'"
+  echo "relay_tunnel: up"
+}
+
+relay_tunnel_down() {
+  relay_exec "wg-quick down '$RELAY_EXIT_IF' 2>/dev/null || true"
+  echo "relay_tunnel: down"
+}
+
+relay_route_off() {
+  relay_exec "
+while ip rule del from '$RELAY_CLIENT_SUBNET' table '$RELAY_ROUTE_TABLE' 2>/dev/null; do :; done
+ip route flush table '$RELAY_ROUTE_TABLE' 2>/dev/null || true
+while iptables -t nat -D POSTROUTING -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j MASQUERADE 2>/dev/null; do :; done
+while iptables -D FORWARD -j WG_RELAY 2>/dev/null; do :; done
+iptables -F WG_RELAY 2>/dev/null || true
+iptables -X WG_RELAY 2>/dev/null || true
+" || true
+  rm -f "$RELAY_ROUTE_FLAG"
+  echo "relay_route: disabled"
+}
+
+relay_route_on() {
+  relay_ensure_forward
+  relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1" || relay_tunnel_up
+  relay_route_off >/dev/null 2>&1 || true
+  relay_exec "
+iptables -N WG_RELAY 2>/dev/null || true
+iptables -F WG_RELAY
+iptables -C FORWARD -j WG_RELAY 2>/dev/null || iptables -A FORWARD -j WG_RELAY
+iptables -A WG_RELAY -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j ACCEPT
+ip route add default dev '$RELAY_EXIT_IF' table '$RELAY_ROUTE_TABLE'
+ip rule add from '$RELAY_CLIENT_SUBNET' table '$RELAY_ROUTE_TABLE'
+iptables -t nat -A POSTROUTING -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j MASQUERADE
+"
+  touch "$RELAY_ROUTE_FLAG"
+  echo "relay_route: enabled"
+}
+
+relay_restart() {
+  relay_tunnel_down
+  relay_tunnel_up
+  if [[ -f "$RELAY_ROUTE_FLAG" ]]; then
+    relay_route_on
+  fi
+}
+
+relay_restore() {
+  if [[ -f "$RELAY_ROUTE_FLAG" ]]; then
+    relay_tunnel_up || true
+    relay_route_on || true
+  fi
+}
+
+relay_status() {
+  echo "relay_config: $RELAY_EXIT_CONF"
+  echo "relay_imported: $([[ -f "$RELAY_EXIT_CONF" ]] && echo yes || echo no)"
+  echo "relay_container: ${WG_EASY_CONTAINER:-host}"
+  echo "relay_exit_if: $RELAY_EXIT_IF"
+  echo "relay_client_subnet: $RELAY_CLIENT_SUBNET"
+  echo "relay_route_table: $RELAY_ROUTE_TABLE"
+  echo
+  echo "=== Tunnel ==="
+  if relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1"; then
+    echo "tunnel: UP"
+    relay_exec "wg show '$RELAY_EXIT_IF' 2>/dev/null || true"
+  else
+    echo "tunnel: DOWN"
+  fi
+  echo
+  echo "=== Route ==="
+  if relay_exec "ip rule show | grep -q 'from $RELAY_CLIENT_SUBNET lookup $RELAY_ROUTE_TABLE'"; then
+    echo "route: ENABLED"
+  else
+    echo "route: DISABLED"
+  fi
+  echo
+  echo "=== Route table $RELAY_ROUTE_TABLE ==="
+  relay_exec "ip route show table '$RELAY_ROUTE_TABLE' 2>/dev/null || true"
+  echo
+  echo "=== NAT ==="
+  relay_exec "iptables -t nat -S POSTROUTING | grep '$RELAY_EXIT_IF' || true"
+  echo
+  echo "=== Relay chain ==="
+  relay_exec "iptables -S WG_RELAY 2>/dev/null || true"
+}
 extract_ips() {
   grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | awk '
     function valid(ip, parts, i) {
@@ -268,6 +391,33 @@ main() {
       ;;
     status)
       status
+      ;;
+    relay-tunnel-up)
+      require_root
+      relay_tunnel_up
+      ;;
+    relay-tunnel-down)
+      require_root
+      relay_tunnel_down
+      ;;
+    relay-restart)
+      require_root
+      relay_restart
+      ;;
+    relay-on)
+      require_root
+      relay_route_on
+      ;;
+    relay-off)
+      require_root
+      relay_route_off
+      ;;
+    relay-restore)
+      require_root
+      relay_restore
+      ;;
+    relay-status)
+      relay_status
       ;;
     -h|--help|help)
       usage
