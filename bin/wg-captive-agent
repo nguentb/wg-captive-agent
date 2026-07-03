@@ -31,7 +31,7 @@ NETNS_PID=""
 
 usage() {
   cat <<'EOF'
-Usage: wg-captive-agent [run|sync|cleanup|status|relay-enable|relay-disable|relay-on|relay-off|relay-status|relay-tunnel-up|relay-tunnel-down|relay-restart|relay-restore]
+Usage: wg-captive-agent [run|sync|cleanup|status|relay-enable|relay-disable|relay-delete-config|relay-on|relay-off|relay-status|relay-tunnel-up|relay-tunnel-down|relay-restart|relay-restore]
 
 Commands:
   run      Sync expired peers in a loop and keep firewall rules installed.
@@ -251,6 +251,31 @@ relay_disable() {
   relay_tunnel_down
 }
 
+relay_delete_config() {
+  local tunnel_on=0
+  local route_on=0
+
+  if relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1"; then
+    tunnel_on=1
+  fi
+
+  if relay_exec "ip rule show | grep -q 'from $RELAY_CLIENT_SUBNET lookup $RELAY_ROUTE_TABLE'"; then
+    route_on=1
+  fi
+
+  if [[ "$tunnel_on" == "1" && "$route_on" == "1" ]]; then
+    die "turn off relay tunnel and route before deleting exit config"
+  elif [[ "$tunnel_on" == "1" ]]; then
+    die "turn off relay tunnel before deleting exit config"
+  elif [[ "$route_on" == "1" ]]; then
+    die "turn off relay route before deleting exit config"
+  fi
+
+  rm -f "$RELAY_EXIT_CONF" "/etc/wireguard/${RELAY_EXIT_IF}.conf"
+  relay_exec "rm -f '/etc/wireguard/${RELAY_EXIT_IF}.conf'"
+  echo "relay_config: deleted"
+}
+
 relay_status() {
   echo "relay_config: $RELAY_EXIT_CONF"
   echo "relay_imported: $([[ -f "$RELAY_EXIT_CONF" ]] && echo yes || echo no)"
@@ -421,6 +446,10 @@ main() {
     relay-disable)
       require_root
       relay_disable
+      ;;
+    relay-delete-config)
+      require_root
+      relay_delete_config
       ;;
     relay-on)
       require_root
