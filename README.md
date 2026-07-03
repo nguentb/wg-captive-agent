@@ -231,6 +231,27 @@ sudo journalctl -u wg-captive-agent -f
 sudo journalctl -u wg-captive-admin -f
 ```
 
+## Uninstall
+
+Go sach service, binary, config, expired file, relay config, backup dir va rule firewall do wg-captive tao:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nguentb/wg-captive-agent/main/uninstall.sh | sudo bash
+```
+
+Neu dang chay tu repo da clone:
+
+```bash
+sudo ./uninstall.sh
+```
+
+Mac dinh script xoa ca `BACKUP_DIR` de tra server ve gan nhu truoc khi cai. Neu muon giu file backup:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nguentb/wg-captive-agent/main/uninstall.sh | sudo KEEP_BACKUPS=1 bash
+```
+
+Script khong go cac package he thong nhu `nodejs`, `iptables`, `ipset`, `curl`, `docker`, vi cac goi nay co the dang duoc dich vu khac tren server su dung.
 ## Luu y
 
 - Repo nay khong tao portal nap tien cho khach hang.
