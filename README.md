@@ -4,14 +4,14 @@ Captive firewall agent cho cac WireGuard/wg-easy server, kem web admin de quan l
 
 ## Tinh nang
 
-- Doc danh sach client truc tiep tu `wg0.json` cua wg-easy.
+- Doc danh sach client tu `wg0.json` cua wg-easy, fallback `wg0.conf`, roi sync ve SQLite.
 - Hien thi giao dien don gian theo phong cach wg-easy: ten, IP, trang thai, nut bat/tat captive.
-- Bat/tat captive bang cach them/xoa IP vao `EXPIRED_FILE` va sync firewall.
+- Bat/tat user va han su dung bang SQLite, agent sync firewall tu DB.
 - Redirect HTTP port 80 cua router bi khoa ve `PORTAL_IP:80`.
 - Cho phep router bi khoa truy cap `PORTAL_IP:80` va `PORTAL_IP:443`.
 - Chan HTTPS toi noi khac, DNS-over-TLS `853`, DNS thuong `53` va traffic con lai.
 - Tab Settings de cau hinh portal IP, relay client subnet, Telegram backup, auto backup theo gio.
-- Backup local `.tar.gz` gom dung cac file: `blocked-ips`, `metadata`, `wg0`.
+- Backup local `.tar.gz` gom `state-db`, `metadata`, `wg0` va `blocked-ips` runtime.
 - Gui backup len Telegram ngay sau khi tao neu da cau hinh bot token/chat ID.
 - Restore tu file backup upload len web admin.
 - Tab Relay de import WireGuard `.conf` cua exit server, tao tunnel `wg-exit` trong container `wg-easy`, va route traffic client qua exit node.
@@ -84,6 +84,7 @@ File `/etc/wg-captive-agent.env`:
 WG_INTERFACE=wg0
 IPSET_NAME=wg_expired
 PORTAL_IP=203.0.113.10
+STATE_DB=/etc/wg-captive-agent.db
 EXPIRED_FILE=/etc/wg-captive-expired.txt
 WG_EASY_JSON=/etc/wireguard/wg0.json
 WG_EASY_CONTAINER=wg-easy
@@ -114,6 +115,7 @@ BLOCK_DOT=0
 ADMIN_HOST=0.0.0.0
 ADMIN_PORT=51822
 ADMIN_PASSWORD=change-this-password
+ADMIN_API_TOKEN=
 ```
 Luu y captive popup: nen de `BLOCK_DNS=0` va `BLOCK_DOT=0` de thiet bi resolve duoc cac domain kiem tra captive nhu `captive.apple.com`, `connectivitycheck.gstatic.com`, `neverssl.com`. Agent van chan web/traffic sau do bang firewall; DNS chi duoc mo de popup co co hoi kich hoat.
 
@@ -121,10 +123,12 @@ Luu y captive popup: nen de `BLOCK_DNS=0` va `BLOCK_DOT=0` de thiet bi resolve d
 
 Tab `Captive`:
 
-- Doc client tu `WG_EASY_JSON` cua wg-easy.
-- Hien thi ten, IP, trang thai `Allowed`/`Blocked`.
-- Switch ON: dua IP client vao `EXPIRED_FILE`, sync firewall.
-- Switch OFF: xoa IP client khoi `EXPIRED_FILE`, sync firewall.
+- Doc client tu `WG_EASY_JSON` cua wg-easy, fallback sang `wg0.conf` neu JSON khong doc duoc, sau do sync ve SQLite `STATE_DB`.
+- Hien thi ten, IP, trang thai `active`/`disabled`/`expired`.
+- `active`: user hoat dong binh thuong.
+- `disabled`: bi admin tat bang switch, luu trong `client_state.disabled`.
+- `expired`: da duoc job het han danh dau vao `client_state.expired_at`.
+- `EXPIRED_FILE` chi la file runtime agent xuat ra de firewall chan ca `disabled` va `expired`.
 
 Tab `Relay`:
 
@@ -143,17 +147,41 @@ Tab `Settings`:
 - Nut `Backup now` tao file local va gui Telegram ngay.
 - Restore tu file `.tar.gz` upload len.
 
+## SQLite state
+
+Tu phien ban SQLite, du lieu chinh nam trong `STATE_DB` voi 3 bang:
+
+- `client_state`: IP, ten client lay tu wg-easy `wg0.json`, public key, `disabled`, `expires_at` va `expired_at`.
+- `node_config`: cac setting chung cua node nhu portal IP, Telegram, DNS block, server IP.
+- `relay_config`: trang thai relay, subnet route, interface exit va noi dung WireGuard .conf da import.
+
+Khong con che do tuong thich JSON cu cho `disabled`/`expiry`; cai dat moi se dung SQLite lam nguon du lieu chinh. `expires_at` la lich het han, `expired_at` la luc backend da dua user vao trang thai expired. `EXPIRED_FILE` chi la output runtime cho firewall.
+
+## Check het han
+
+Backend web admin dat lich check het han theo cac moc gio trong `EXPIRY_CHECK_TIMES`, mac dinh `00:10,12:10`. Moi lan den moc gio, backend:
+
+- Tim user co `expires_at <= now` va `expired_at` con trong.
+- Ghi `expired_at=now` cho cac user moi het han.
+- Tao lai `EXPIRED_FILE` tu cac user `disabled` + `expired`.
+- Goi `wg-captive-agent sync` de cap nhat ipset/firewall.
+
+Co the tat job bang `EXPIRY_CHECK_ENABLED=0`. Central server co the goi thu cong `POST /api/v1/expiry/check` neu muon tu dieu phoi lich rieng.
+
 ## Dinh dang backup
 
-Backup la file `.tar.gz` trong `BACKUP_DIR`, gom 3 file:
+Backup la file `.tar.gz` trong `BACKUP_DIR`, gom cac file:
 
 ```text
 blocked-ips
 metadata
 wg0
+state-db
 ```
 
-`blocked-ips`: moi dong la mot IP WireGuard dang bi khoa.
+`blocked-ips`: moi dong la mot IP WireGuard dang bi khoa, gom ca `disabled` va `expired`.
+
+`state-db`: ban sao SQLite gom 3 bang `client_state`, `node_config`, `relay_config`.
 
 `wg0`: ban sao cua `wg0.json` tu wg-easy.
 
@@ -165,12 +193,45 @@ wg0
   "server_ip": "203.0.113.20",
   "backup_time": "2026-07-02T07:00:00.000Z",
   "blocked_users": 3,
+  "disabled_users": 1,
+  "expired_users": 2,
   "wg_easy_json": "/etc/wireguard/wg0.json",
-  "expired_file": "/etc/wg-captive-expired.txt"
+  "expired_file": "/etc/wg-captive-expired.txt",
+  "state_db": "/etc/wg-captive-agent.db"
 }
 ```
 
-Restore trong web admin chi ghi lai `blocked-ips` vao `EXPIRED_FILE` roi sync firewall. File `wg0` chi nam trong backup de luu tru; neu can restore `wg0.json`, thuc hien qua panel cua wg-easy.
+Restore trong web admin yeu cau backup co `state-db`, sau do tao lai `EXPIRED_FILE` va sync firewall. File `wg0` chi nam trong backup de luu tru; neu can restore `wg0.json`, thuc hien qua panel cua wg-easy.
+
+
+## API v1
+
+Frontend web admin chi giao tiep voi backend qua API `/api/v1/*`. Central server sau nay co the goi cung API nay bang header:
+
+```http
+Authorization: Bearer <ADMIN_API_TOKEN>
+```
+
+Neu dang truy cap web admin bang browser thi cookie login van dung duoc. Cac endpoint chinh:
+
+```text
+GET  /api/v1
+GET  /api/v1/state
+GET  /api/v1/clients
+POST /api/v1/clients/{ip}/status      { "status": "active" | "disabled" }
+POST /api/v1/clients/{ip}/expiry      { "expires_at": "2026-08-01T00:00:00.000Z" }
+POST /api/v1/expiry/check
+GET  /api/v1/settings
+POST /api/v1/settings
+GET  /api/v1/relay
+POST /api/v1/relay/action             { "action": "relay-on" }
+POST /api/v1/relay/import             multipart field: relayConf
+POST /api/v1/backup
+POST /api/v1/restore                  multipart field: backup
+POST /api/v1/sync
+```
+
+Trang frontend hien tai dung object `API_ENDPOINTS` trong `web/wg-captive-admin.js`, nen neu sau nay tach frontend rieng hoac central proxy API thi chi can doi base/path o mot cho.
 
 ## Co che auto pop-up
 

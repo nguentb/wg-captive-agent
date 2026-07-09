@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update
+    apt-get install -y sqlite3
+  else
+    echo "sqlite3 is required. Install sqlite3 first, then run install.sh again." >&2
+    exit 1
+  fi
+fi
+
 install -m 0755 bin/wg-captive-agent /usr/local/sbin/wg-captive-agent
 install -d -m 0755 /usr/local/lib/wg-captive-agent
 install -d -m 0755 /var/backups/wg-captive
+install -d -m 0755 /var/lib/wg-captive-agent
 install -m 0755 web/wg-captive-admin.js /usr/local/lib/wg-captive-agent/wg-captive-admin.js
 
 if [[ ! -f /etc/wg-captive-agent.env ]]; then

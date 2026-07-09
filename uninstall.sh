@@ -8,6 +8,7 @@ APP_LIB_DIR="${APP_LIB_DIR:-/usr/local/lib/wg-captive-agent}"
 WG_INTERFACE="wg0"
 IPSET_NAME="wg_expired"
 EXPIRED_FILE="/etc/wg-captive-expired.txt"
+STATE_DB="/etc/wg-captive-agent.db"
 BACKUP_DIR="/var/backups/wg-captive"
 WG_EASY_CONTAINER="wg-easy"
 RELAY_EXIT_IF="wg-exit"
@@ -111,6 +112,8 @@ remove_files() {
 
   rm -f "$CONFIG_FILE"
   rm -f "$EXPIRED_FILE"
+  rm -f "$STATE_DB"
+  rm -rf /var/lib/wg-captive-agent
   rm -f "$RELAY_EXIT_CONF"
   rm -f "$RELAY_ROUTE_FLAG"
   rm -f /etc/sysctl.d/99-wg-captive-relay.conf

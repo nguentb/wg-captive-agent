@@ -11,7 +11,8 @@ fi
 WG_INTERFACE="${WG_INTERFACE:-wg0}"
 IPSET_NAME="${IPSET_NAME:-wg_expired}"
 PORTAL_IP="${PORTAL_IP:-}"
-EXPIRED_FILE="${EXPIRED_FILE:-}"
+EXPIRED_FILE="${EXPIRED_FILE:-/etc/wg-captive-expired.txt}"
+STATE_DB="${STATE_DB:-/etc/wg-captive-agent.db}"
 EXPIRED_URL="${EXPIRED_URL:-}"
 API_TOKEN="${API_TOKEN:-}"
 SYNC_INTERVAL="${SYNC_INTERVAL:-30}"
@@ -24,6 +25,63 @@ RELAY_CLIENT_SUBNET="${RELAY_CLIENT_SUBNET:-10.8.0.0/24}"
 RELAY_ROUTE_TABLE="${RELAY_ROUTE_TABLE:-200}"
 RELAY_EXIT_CONF="${RELAY_EXIT_CONF:-/etc/wg-captive-relay-exit.conf}"
 RELAY_ROUTE_FLAG="${RELAY_ROUTE_FLAG:-/etc/wg-captive-relay.enabled}"
+
+sqlite_escape() {
+  printf "%s" "$1" | sed "s/'/''/g"
+}
+
+db_scalar() {
+  local sql="$1"
+  [[ -f "$STATE_DB" ]] || return 1
+  command -v sqlite3 >/dev/null 2>&1 || return 1
+  sqlite3 -noheader "$STATE_DB" "$sql" 2>/dev/null | head -n 1
+}
+
+db_exec() {
+  local sql="$1"
+  [[ -f "$STATE_DB" ]] || return 0
+  command -v sqlite3 >/dev/null 2>&1 || return 0
+  sqlite3 "$STATE_DB" "$sql" >/dev/null 2>&1 || true
+}
+
+db_config_value() {
+  local key
+  key="$(sqlite_escape "$1")"
+  db_scalar "SELECT value FROM node_config WHERE key='$key';" || true
+}
+
+db_load_runtime_config() {
+  local value
+  value="$(db_config_value PORTAL_IP)"; [[ -n "$value" ]] && PORTAL_IP="$value"
+  value="$(db_config_value BLOCK_DNS)"; [[ -n "$value" ]] && BLOCK_DNS="$value"
+  value="$(db_config_value BLOCK_DOT)"; [[ -n "$value" ]] && BLOCK_DOT="$value"
+  value="$(db_scalar "SELECT exit_if FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_EXIT_IF="$value"
+  value="$(db_scalar "SELECT client_subnet FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_CLIENT_SUBNET="$value"
+  value="$(db_scalar "SELECT route_table FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_ROUTE_TABLE="$value"
+  value="$(db_scalar "SELECT exit_conf_path FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_EXIT_CONF="$value"
+}
+
+db_write_relay_conf() {
+  [[ -f "$STATE_DB" ]] || return 0
+  command -v sqlite3 >/dev/null 2>&1 || return 0
+  local content
+  content="$(sqlite3 -noheader "$STATE_DB" "SELECT exit_conf FROM relay_config WHERE id=1 AND exit_conf IS NOT NULL AND exit_conf != '';" 2>/dev/null || true)"
+  if [[ -n "$content" && ! -f "$RELAY_EXIT_CONF" ]]; then
+    install -d -m 0755 "$(dirname "$RELAY_EXIT_CONF")"
+    printf "%s\n" "$content" > "$RELAY_EXIT_CONF"
+    chmod 600 "$RELAY_EXIT_CONF" 2>/dev/null || true
+  fi
+}
+
+db_set_relay_enabled() {
+  db_exec "UPDATE relay_config SET enabled=$1, updated_at=CURRENT_TIMESTAMP WHERE id=1;"
+}
+
+db_clear_relay_conf() {
+  db_exec "UPDATE relay_config SET enabled=0, exit_conf=NULL, imported_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=1;"
+}
+
+db_load_runtime_config
 
 NAT_CHAIN="WG_CAPTIVE_NAT"
 FILTER_CHAIN="WG_CAPTIVE_FILTER"
@@ -167,6 +225,7 @@ relay_exec() {
 }
 
 relay_copy_conf() {
+  db_write_relay_conf
   [[ -f "$RELAY_EXIT_CONF" ]] || die "relay config not found: $RELAY_EXIT_CONF"
   install -d -m 0755 /etc/wireguard
   install -m 0600 "$RELAY_EXIT_CONF" "/etc/wireguard/${RELAY_EXIT_IF}.conf"
@@ -206,10 +265,12 @@ iptables -F WG_RELAY 2>/dev/null || true
 iptables -X WG_RELAY 2>/dev/null || true
 " || true
   rm -f "$RELAY_ROUTE_FLAG"
+  db_set_relay_enabled 0
   echo "relay_route: disabled"
 }
 
 relay_route_on() {
+  db_write_relay_conf
   [[ -f "$RELAY_EXIT_CONF" ]] || die "import relay exit config before enabling route"
   relay_ensure_forward
   relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1" || relay_tunnel_up
@@ -224,6 +285,7 @@ ip rule add from '$RELAY_CLIENT_SUBNET' table '$RELAY_ROUTE_TABLE'
 iptables -t nat -A POSTROUTING -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j MASQUERADE
 "
   touch "$RELAY_ROUTE_FLAG"
+  db_set_relay_enabled 1
   echo "relay_route: enabled"
 }
 
@@ -274,6 +336,7 @@ relay_delete_config() {
 
   rm -f "$RELAY_EXIT_CONF" "/etc/wireguard/${RELAY_EXIT_IF}.conf"
   relay_exec "rm -f '/etc/wireguard/${RELAY_EXIT_IF}.conf'"
+  db_clear_relay_conf
   echo "relay_config: deleted"
 }
 
@@ -332,14 +395,13 @@ fetch_expired_ips() {
     return
   fi
 
-  if [[ -n "$EXPIRED_FILE" && -f "$EXPIRED_FILE" ]]; then
-    extract_ips < "$EXPIRED_FILE"
+  if [[ -f "$STATE_DB" && -x "$(command -v sqlite3 2>/dev/null || true)" ]]; then
+    sqlite3 -noheader "$STATE_DB" "SELECT ip FROM client_state WHERE disabled=1 OR (expired_at IS NOT NULL AND expired_at != '') ORDER BY ip;" 2>/dev/null | extract_ips
     return
   fi
 
   true
 }
-
 sync_ipset() {
   local tmp_set="${IPSET_NAME}_next"
 
