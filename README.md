@@ -96,6 +96,8 @@ File `/etc/wg-captive-agent.env`:
 WG_INTERFACE=wg0
 IPSET_NAME=wg_expired
 PORTAL_IP=203.0.113.10
+CAPTIVE_ALLOW_HOSTS=wa.me,api.whatsapp.com,zalo.me,oa.zalo.me,chat.zalo.me
+CAPTIVE_ALLOW_IPS=
 STATE_DB=/etc/wg-captive-agent.db
 EXPIRED_FILE=/etc/wg-captive-expired.txt
 WG_EASY_JSON=/etc/wireguard/wg0.json
@@ -130,6 +132,8 @@ ADMIN_PASSWORD=change-this-password
 ADMIN_API_TOKEN=
 ```
 Luu y captive popup: nen de `BLOCK_DNS=0` va `BLOCK_DOT=0` de thiet bi resolve duoc cac domain kiem tra captive nhu `captive.apple.com`, `connectivitycheck.gstatic.com`, `neverssl.com`. Agent van chan web/traffic sau do bang firewall; DNS chi duoc mo de popup co co hoi kich hoat.
+
+`CAPTIVE_ALLOW_HOSTS` la danh sach domain cach nhau boi dau phay ma user het han van duoc truy cap, mac dinh gom `wa.me`, `api.whatsapp.com` va mot so domain Zalo de mo WhatsApp/Zalo. Agent se resolve cac host nay thanh IP va dua vao ipset allow rieng; neu ung dung redirect sang domain khac, them domain do vao bien nay hoac them IP vao `CAPTIVE_ALLOW_IPS`.
 
 ## Web admin
 

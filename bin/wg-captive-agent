@@ -10,7 +10,10 @@ fi
 
 WG_INTERFACE="${WG_INTERFACE:-wg0}"
 IPSET_NAME="${IPSET_NAME:-wg_expired}"
+ALLOW_IPSET_NAME="${ALLOW_IPSET_NAME:-${IPSET_NAME}_allow}"
 PORTAL_IP="${PORTAL_IP:-}"
+CAPTIVE_ALLOW_HOSTS="${CAPTIVE_ALLOW_HOSTS:-wa.me,api.whatsapp.com,zalo.me,oa.zalo.me,chat.zalo.me}"
+CAPTIVE_ALLOW_IPS="${CAPTIVE_ALLOW_IPS:-}"
 EXPIRED_FILE="${EXPIRED_FILE:-/etc/wg-captive-expired.txt}"
 STATE_DB="${STATE_DB:-/etc/wg-captive-agent.db}"
 EXPIRED_URL="${EXPIRED_URL:-}"
@@ -55,6 +58,8 @@ db_load_runtime_config() {
   value="$(db_config_value PORTAL_IP)"; [[ -n "$value" ]] && PORTAL_IP="$value"
   value="$(db_config_value BLOCK_DNS)"; [[ -n "$value" ]] && BLOCK_DNS="$value"
   value="$(db_config_value BLOCK_DOT)"; [[ -n "$value" ]] && BLOCK_DOT="$value"
+  value="$(db_config_value CAPTIVE_ALLOW_HOSTS)"; [[ -n "$value" ]] && CAPTIVE_ALLOW_HOSTS="$value"
+  value="$(db_config_value CAPTIVE_ALLOW_IPS)"; [[ -n "$value" ]] && CAPTIVE_ALLOW_IPS="$value"
   value="$(db_scalar "SELECT exit_if FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_EXIT_IF="$value"
   value="$(db_scalar "SELECT client_subnet FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_CLIENT_SUBNET="$value"
   value="$(db_scalar "SELECT route_table FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_ROUTE_TABLE="$value"
@@ -179,6 +184,8 @@ ensure_chain() {
 
 ensure_firewall() {
   ips create "$IPSET_NAME" hash:ip -exist
+  ips create "$ALLOW_IPSET_NAME" hash:ip -exist
+  sync_allow_ipset
 
   ensure_chain nat "$NAT_CHAIN"
   ensure_chain filter "$FILTER_CHAIN"
@@ -191,8 +198,11 @@ ensure_firewall() {
   ipt -t nat -F "$NAT_CHAIN"
   ipt -t filter -F "$FILTER_CHAIN"
 
+  ipt -t nat -A "$NAT_CHAIN" -m set --match-set "$ALLOW_IPSET_NAME" dst -j RETURN
   ipt -t nat -A "$NAT_CHAIN" -p tcp --dport 80 -j DNAT --to-destination "${PORTAL_IP}:80"
 
+  ipt -t filter -A "$FILTER_CHAIN" -m set --match-set "$ALLOW_IPSET_NAME" dst -p tcp --dport 80 -j ACCEPT
+  ipt -t filter -A "$FILTER_CHAIN" -m set --match-set "$ALLOW_IPSET_NAME" dst -p tcp --dport 443 -j ACCEPT
   ipt -t filter -A "$FILTER_CHAIN" -d "$PORTAL_IP" -p tcp --dport 80 -j ACCEPT
   ipt -t filter -A "$FILTER_CHAIN" -d "$PORTAL_IP" -p tcp --dport 443 -j ACCEPT
 
@@ -384,6 +394,31 @@ extract_ips() {
     valid($1) { print $1 }
   ' | sort -u
 }
+list_items() {
+  printf "%s\n" "$1" | tr ',;' '\n\n' | awk '{$1=$1}; NF {print}'
+}
+
+resolve_allowlist_ips() {
+  list_items "$CAPTIVE_ALLOW_IPS" | extract_ips || true
+  while IFS= read -r host; do
+    [[ -n "$host" ]] || continue
+    getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | extract_ips || true
+  done < <(list_items "$CAPTIVE_ALLOW_HOSTS")
+}
+
+sync_allow_ipset() {
+  local tmp_set="${ALLOW_IPSET_NAME}_next"
+  ips create "$ALLOW_IPSET_NAME" hash:ip -exist
+  ips create "$tmp_set" hash:ip -exist
+  ips flush "$tmp_set"
+
+  while IFS= read -r ip; do
+    [[ -n "$ip" ]] && ips add "$tmp_set" "$ip" -exist
+  done < <(resolve_allowlist_ips)
+
+  ips swap "$tmp_set" "$ALLOW_IPSET_NAME"
+  ips destroy "$tmp_set" >/dev/null 2>&1 || true
+}
 
 fetch_expired_ips() {
   if [[ -n "$EXPIRED_URL" ]]; then
@@ -435,6 +470,7 @@ cleanup() {
   fi
 
   ips destroy "$IPSET_NAME" >/dev/null 2>&1 || true
+  ips destroy "$ALLOW_IPSET_NAME" >/dev/null 2>&1 || true
 }
 
 status() {
@@ -442,12 +478,17 @@ status() {
   echo "config: $CONFIG_FILE"
   echo "interface: $WG_INTERFACE"
   echo "ipset: $IPSET_NAME"
+  echo "allow_ipset: $ALLOW_IPSET_NAME"
   echo "portal_ip: $PORTAL_IP"
+  echo "captive_allow_hosts: ${CAPTIVE_ALLOW_HOSTS:-none}"
+  echo "captive_allow_ips: ${CAPTIVE_ALLOW_IPS:-none}"
   echo "wg_easy_container: ${WG_EASY_CONTAINER:-host}"
   echo "docker_dns_ip: ${DOCKER_DNS_IP:-disabled}"
   echo "netns_pid: ${NETNS_PID:-host}"
   echo
   ips list "$IPSET_NAME" 2>/dev/null || true
+  echo
+  ips list "$ALLOW_IPSET_NAME" 2>/dev/null || true
   echo
   ipt -t nat -S PREROUTING 2>/dev/null | grep "$NAT_CHAIN" || true
   ipt -t nat -S "$NAT_CHAIN" 2>/dev/null || true
@@ -457,6 +498,7 @@ status() {
 }
 
 sync_once() {
+  db_load_runtime_config
   require_root
   require_config
   ensure_tools
