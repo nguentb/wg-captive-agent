@@ -162,11 +162,12 @@ Tab `Settings`:
 
 ## SQLite state
 
-Tu phien ban SQLite, du lieu chinh nam trong `STATE_DB` voi 3 bang:
+Tu phien ban SQLite, du lieu chinh nam trong `STATE_DB`:
 
 - `client_state`: IP, ten client lay tu wg-easy `wg0.json`, public key, `disabled`, `expires_at` va `expired_at`.
 - `node_config`: cac setting chung cua node nhu portal IP, Telegram, DNS block, server IP.
 - `relay_config`: trang thai relay, subnet route, interface exit va noi dung WireGuard .conf da import.
+- `api_tokens`: cac token API cua node, dung cho central server/tool ben ngoai goi API.
 
 Khong con che do tuong thich JSON cu cho `disabled`/`expiry`; cai dat moi se dung SQLite lam nguon du lieu chinh. `expires_at` la lich het han, `expired_at` la luc backend da dua user vao trang thai expired. `EXPIRED_FILE` chi la output runtime cho firewall.
 
@@ -194,7 +195,7 @@ state-db
 
 `blocked-ips`: moi dong la mot IP WireGuard dang bi khoa, gom ca `disabled` va `expired`.
 
-`state-db`: ban sao SQLite gom 3 bang `client_state`, `node_config`, `relay_config`.
+`state-db`: ban sao SQLite gom cac bang `client_state`, `node_config`, `relay_config`, `api_tokens`.
 
 `wg0`: ban sao cua `wg0.json` tu wg-easy.
 
@@ -258,7 +259,7 @@ Cai SSL khong anh huong WireGuard vi WireGuard dung UDP rieng, thuong la `51820`
 Frontend web admin chi giao tiep voi backend qua API `/api/v1/*`. Central server sau nay co the goi cung API nay bang header:
 
 ```http
-Authorization: Bearer <ADMIN_API_TOKEN>
+Authorization: Bearer <API_TOKEN>
 ```
 
 Neu dang truy cap web admin bang browser thi cookie login van dung duoc. Cac endpoint chinh:
@@ -272,6 +273,10 @@ POST /api/v1/clients/{ip}/expiry      { "expires_at": "2026-08-01T00:00:00.000Z"
 POST /api/v1/expiry/check
 GET  /api/v1/settings
 POST /api/v1/settings
+GET  /api/v1/tokens
+POST /api/v1/tokens                 { "name": "central" }
+GET  /api/v1/tokens/{id}/copy
+DELETE /api/v1/tokens/{id}
 GET  /api/v1/relay
 POST /api/v1/relay/action             { "action": "relay-on" }
 POST /api/v1/relay/import             multipart field: relayConf
