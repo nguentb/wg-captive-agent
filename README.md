@@ -219,22 +219,39 @@ Restore trong web admin yeu cau backup co `state-db`, sau do tao lai `EXPIRED_FI
 
 ## Cai SSL cho node bang Cloudflare
 
-Neu node co domain nam tren Cloudflare, co the lay Let's Encrypt bang DNS-01, khong can mo port 80 cho ACME. Chay lenh sau tren server:
+Neu node co domain nam tren Cloudflare, co the lay Let's Encrypt bang DNS-01. Chay lenh sau tren server:
 
 ```bash
 sudo captive_ssl_cloudflare
 ```
 
-Moi lan chay, tool se hoi lan luot `Domain`, `Email` va `Cloudflare API token`. Token Cloudflare can quyen `Zone.Zone:Read` va `Zone.DNS:Edit` tren zone chua domain. Script se:
+Tool nay chi cau hinh SSL/nginx cho `wg-captive-admin` va API. wg-easy panel giu nguyen cach chay hien tai, vi wg-easy nam trong container va khong thuoc pham vi tool nay.
+
+Moi lan chay, tool se hoi `Domain`, `Email`, `Cloudflare API token`, cong HTTPS public cho admin va cong HTTP noi bo cho admin. Mac dinh:
+
+```text
+https://wg.domain.com:51822 -> http://127.0.0.1:51824
+```
+
+Script se tu sua `/etc/wg-captive-agent.env` thanh:
+
+```text
+ADMIN_HOST=127.0.0.1
+ADMIN_PORT=51824
+```
+
+Sau do nginx dung cert cua `wg.domain.com` de listen `51822/https` va proxy ve admin/API noi bo. Cert SSL cap theo hostname, nen co the dung cho `wg.domain.com:51822` ma khong can dung truc tiep `https://wg.domain.com` port `443`.
+
+Token Cloudflare can quyen `Zone.Zone:Read` va `Zone.DNS:Edit` tren zone chua domain. Script se:
 
 - Cai `nginx`, `certbot`, `python3-certbot-dns-cloudflare`.
 - Luu cau hinh SSL vao `/etc/wg-captive-ssl-cloudflare.env` voi quyen `600`.
 - Luu Cloudflare token vao `/etc/letsencrypt/cloudflare-wg-captive-admin.ini` voi quyen `600`.
 - Lay cert Let's Encrypt cho domain da nhap.
-- Tao nginx HTTPS reverse proxy ve admin/API noi bo `http://127.0.0.1:51822`.
+- Tao nginx HTTPS reverse proxy cho admin/API tren cong custom, mac dinh la `51822`.
 - Tao renewal hook de certbot tu reload nginx sau khi gia han chung chi.
 
-Cai SSL khong anh huong WireGuard vi WireGuard dung UDP rieng, thuong la `51820`, con HTTPS dung TCP `443`.
+Cai SSL khong anh huong WireGuard vi WireGuard dung UDP rieng, thuong la `51820`. wg-easy panel van co the tiep tuc chay HTTP nhu cu tren cong rieng cua no.
 
 ## API v1
 
