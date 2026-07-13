@@ -7,7 +7,6 @@ APP_LIB_DIR="${APP_LIB_DIR:-/usr/local/lib/wg-captive-agent}"
 
 WG_INTERFACE="wg0"
 IPSET_NAME="wg_expired"
-ALLOW_IPSET_NAME="${ALLOW_IPSET_NAME:-${IPSET_NAME}_allow}"
 EXPIRED_FILE="/etc/wg-captive-expired.txt"
 STATE_DB="/etc/wg-captive-agent.db"
 BACKUP_DIR="/var/backups/wg-captive"
@@ -72,7 +71,6 @@ remove_captive_rules() {
   netns_run iptables -F WG_CAPTIVE_FILTER
   netns_run iptables -X WG_CAPTIVE_FILTER
   netns_run ipset destroy "$IPSET_NAME"
-  netns_run ipset destroy "$ALLOW_IPSET_NAME"
 }
 
 remove_relay_rules() {
