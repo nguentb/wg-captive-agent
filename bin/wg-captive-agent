@@ -12,7 +12,6 @@ WG_INTERFACE="${WG_INTERFACE:-wg0}"
 IPSET_NAME="${IPSET_NAME:-wg_expired}"
 PORTAL_IP="${PORTAL_IP:-}"
 PORTAL_URL="${PORTAL_URL:-}"
-CAPTIVE_REDIRECT_PORT="${CAPTIVE_REDIRECT_PORT:-51823}"
 EXPIRED_FILE="${EXPIRED_FILE:-/etc/wg-captive-expired.txt}"
 STATE_DB="${STATE_DB:-/etc/wg-captive-agent.db}"
 EXPIRED_URL="${EXPIRED_URL:-}"
@@ -112,7 +111,6 @@ require_root() {
 }
 
 require_config() {
-  [[ -n "$PORTAL_URL" ]] || die "PORTAL_URL is required; set Portal URL in admin settings"
   [[ -n "$PORTAL_IP" ]] || die "PORTAL_IP is required; save Portal URL in admin first to resolve and store it"
 }
 
@@ -194,7 +192,7 @@ ensure_firewall() {
   ipt -t nat -F "$NAT_CHAIN"
   ipt -t filter -F "$FILTER_CHAIN"
 
-  ipt -t nat -A "$NAT_CHAIN" -p tcp --dport 80 -j REDIRECT --to-ports "$CAPTIVE_REDIRECT_PORT"
+  ipt -t nat -A "$NAT_CHAIN" -p tcp --dport 80 -j DNAT --to-destination "${PORTAL_IP}:80"
 
   ipt -t filter -A "$FILTER_CHAIN" -d "$PORTAL_IP" -p tcp --dport 80 -j ACCEPT
   ipt -t filter -A "$FILTER_CHAIN" -d "$PORTAL_IP" -p tcp --dport 443 -j ACCEPT
@@ -446,7 +444,6 @@ status() {
   echo "ipset: $IPSET_NAME"
   echo "portal_url: ${PORTAL_URL:-}"
   echo "portal_ip: $PORTAL_IP"
-  echo "redirect_port: $CAPTIVE_REDIRECT_PORT"
   echo "wg_easy_container: ${WG_EASY_CONTAINER:-host}"
   echo "docker_dns_ip: ${DOCKER_DNS_IP:-disabled}"
   echo "netns_pid: ${NETNS_PID:-host}"

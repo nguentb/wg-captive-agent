@@ -13,8 +13,6 @@ const dns = require("dns").promises;
 const CONFIG_FILE = process.env.CONFIG_FILE || "/etc/wg-captive-agent.env";
 const HOST = process.env.ADMIN_HOST || "0.0.0.0";
 const PORT = Number(process.env.ADMIN_PORT || "51822");
-const CAPTIVE_REDIRECT_HOST = process.env.CAPTIVE_REDIRECT_HOST || "0.0.0.0";
-const CAPTIVE_REDIRECT_PORT = Number(process.env.CAPTIVE_REDIRECT_PORT || "51823");
 const PASSWORD = process.env.ADMIN_PASSWORD || "";
 const AGENT_BIN = process.env.AGENT_BIN || "/usr/local/sbin/wg-captive-agent";
 
@@ -1136,43 +1134,6 @@ function scheduleExpiryCheckLoop() {
   }, delay);
   expiryCheckTimer.unref?.();
 }
-function normalizeRemoteIp(value) {
-  let ip = String(value || "").trim();
-  if (ip.startsWith("::ffff:")) ip = ip.slice(7);
-  if (ip === "::1") ip = "127.0.0.1";
-  return ip;
-}
-
-function portalBaseUrl(config) {
-  const raw = String(config.PORTAL_URL || "").trim();
-  if (!raw) return "";
-  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-}
-
-function captiveRedirectLocation(req) {
-  const config = loadConfig();
-  const base = portalBaseUrl(config);
-  if (!base) return "";
-  const target = new URL(base);
-  target.searchParams.set("node", config.SERVER_NAME || os.hostname());
-  target.searchParams.set("ip", normalizeRemoteIp(req.socket.remoteAddress));
-  return target.toString();
-}
-
-function handleCaptiveRedirect(req, res) {
-  try {
-    const location = captiveRedirectLocation(req);
-    if (!location) {
-      res.writeHead(503, noStoreHeaders({ "Content-Type": "text/plain; charset=utf-8" }));
-      return res.end("Portal URL is not configured");
-    }
-    res.writeHead(302, noStoreHeaders({ Location: location, "Content-Type": "text/plain; charset=utf-8" }));
-    return res.end(`Redirecting to ${location}\n`);
-  } catch (error) {
-    res.writeHead(500, noStoreHeaders({ "Content-Type": "text/plain; charset=utf-8" }));
-    return res.end(error.message);
-  }
-}
 function tickAutoBackup() {
   const config = loadConfig();
   if (config.AUTO_BACKUP_ENABLED !== "1") return;
@@ -1189,10 +1150,6 @@ http.createServer(handle).listen(PORT, HOST, () => {
   console.log(`wg-captive-admin listening on http://${HOST}:${PORT}`);
   setInterval(tickAutoBackup, 30000).unref();
   scheduleExpiryCheckLoop();
-});
-
-http.createServer(handleCaptiveRedirect).listen(CAPTIVE_REDIRECT_PORT, CAPTIVE_REDIRECT_HOST, () => {
-  console.log(`wg-captive-redirect listening on http://${CAPTIVE_REDIRECT_HOST}:${CAPTIVE_REDIRECT_PORT}`);
 });
 
 

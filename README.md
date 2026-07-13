@@ -7,8 +7,8 @@ Captive firewall agent cho cac WireGuard/wg-easy server, kem web admin de quan l
 - Doc danh sach client tu `wg0.json` cua wg-easy, fallback `wg0.conf`, roi sync ve SQLite.
 - Hien thi giao dien don gian theo phong cach wg-easy: ten, IP, trang thai, nut bat/tat captive.
 - Bat/tat user va han su dung bang SQLite, agent sync firewall tu DB.
-- Redirect HTTP port 80 cua router bi khoa ve redirect service local, sau do tra `302` sang `PORTAL_URL/?node=SERVER_NAME&ip=CLIENT_IP`.
-- Cho phep router bi khoa truy cap `PORTAL_IP` da duoc resolve tu `PORTAL_URL` khi bam Save Settings tren port 443.
+- Redirect HTTP port 80 cua router bi khoa ve portal host trong `PORTAL_URL` port 80.
+- Cho phep router bi khoa truy cap `PORTAL_IP` da duoc resolve tu `PORTAL_URL` khi bam Save Settings tren port 80/443.
 - Chan HTTPS toi noi khac, DNS-over-TLS `853`, DNS thuong `53` va traffic con lai.
 - Tab Settings de cau hinh portal URL, relay client subnet, Telegram backup, auto backup theo gio.
 - Backup local `.tar.gz` gom `state-db`, `metadata`, `wg0` va `blocked-ips` runtime.
@@ -28,8 +28,8 @@ WireGuard server + wg-captive-agent
         +-- active router: internet binh thuong
         |
         +-- blocked router:
-            - HTTP -> redirect service local -> PORTAL_URL/?node=SERVER_NAME&ip=CLIENT_IP
-            - PORTAL_IP da luu:443 duoc phep
+            - HTTP -> PORTAL_IP da luu:80
+            - PORTAL_IP da luu:80/443 duoc phep
             - TCP 443 toi noi khac bi chan
             - TCP 853 DoT bi chan
             - traffic con lai bi chan
@@ -291,21 +291,13 @@ Trang frontend hien tai dung object `API_ENDPOINTS` trong `web/wg-captive-admin.
 
 ## Co che auto pop-up
 
-He dieu hanh thuong goi cac URL HTTP de kiem tra captive portal. Khi admin bam Save Settings, web admin resolve host trong `PORTAL_URL` thanh IP va ghi vao `PORTAL_IP` de firewall cho phep portal HTTPS.
+He dieu hanh thuong goi cac URL HTTP de kiem tra captive portal. Khi admin bam Save Settings, web admin resolve host trong `PORTAL_URL` thanh IP va ghi vao `PORTAL_IP`. Khi router het han, agent chi doc `PORTAL_IP` da luu de DNAT moi request HTTP port 80 tu router do ve portal port 80. Web portal HTTP nen tra HTML don gian, sau do tu chuyen sang HTTPS:
 
-Khi user bi `expired` hoac `disabled`, agent khong DNAT thang sang portal nua. HTTP port 80 cua user se bi `REDIRECT` ve redirect service noi bo tren node, mac dinh `CAPTIVE_REDIRECT_PORT=51823`. Service nay doc IP that cua WireGuard client tu ket noi local va tra ve:
-
-```text
-302 Location: PORTAL_URL/?node=SERVER_NAME&ip=CLIENT_IP
+```html
+<meta http-equiv="refresh" content="1; url=https://203.0.113.10/captive">
 ```
 
-Vi du:
-
-```text
-https://portal.example.com/?node=wg-server-01&ip=10.8.0.2
-```
-
-Portal sau do dung `node` va `ip` de goi API node, lay ten user va trang thai hien tai.
+Dieu kien quan trong: HTTPS theo IP can certificate co SAN dang `IP Address: 203.0.113.10`.
 
 ## Lenh van hanh
 
