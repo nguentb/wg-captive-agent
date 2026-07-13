@@ -217,6 +217,25 @@ state-db
 Restore trong web admin yeu cau backup co `state-db`, sau do tao lai `EXPIRED_FILE` va sync firewall. File `wg0` chi nam trong backup de luu tru; neu can restore `wg0.json`, thuc hien qua panel cua wg-easy.
 
 
+## Cai SSL cho node bang Cloudflare
+
+Neu node co domain nam tren Cloudflare, co the lay Let's Encrypt bang DNS-01, khong can mo port 80 cho ACME. Chay lenh sau tren server:
+
+```bash
+sudo captive_ssl_cloudflare
+```
+
+Moi lan chay, tool se hoi lan luot `Domain`, `Email` va `Cloudflare API token`. Token Cloudflare can quyen `Zone.Zone:Read` va `Zone.DNS:Edit` tren zone chua domain. Script se:
+
+- Cai `nginx`, `certbot`, `python3-certbot-dns-cloudflare`.
+- Luu cau hinh SSL vao `/etc/wg-captive-ssl-cloudflare.env` voi quyen `600`.
+- Luu Cloudflare token vao `/etc/letsencrypt/cloudflare-wg-captive-admin.ini` voi quyen `600`.
+- Lay cert Let's Encrypt cho domain da nhap.
+- Tao nginx HTTPS reverse proxy ve admin/API noi bo `http://127.0.0.1:51822`.
+- Tao renewal hook de certbot tu reload nginx sau khi gia han chung chi.
+
+Cai SSL khong anh huong WireGuard vi WireGuard dung UDP rieng, thuong la `51820`, con HTTPS dung TCP `443`.
+
 ## API v1
 
 Frontend web admin chi giao tiep voi backend qua API `/api/v1/*`. Central server sau nay co the goi cung API nay bang header:

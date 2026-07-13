@@ -16,6 +16,10 @@ RELAY_CLIENT_SUBNET="10.8.0.0/24"
 RELAY_ROUTE_TABLE="200"
 RELAY_EXIT_CONF="/etc/wg-captive-relay-exit.conf"
 RELAY_ROUTE_FLAG="/etc/wg-captive-relay.enabled"
+SSL_CONFIG_FILE="/etc/wg-captive-ssl-cloudflare.env"
+SSL_NGINX_SITE="wg-captive-admin"
+SSL_CF_CREDENTIALS_FILE="/etc/letsencrypt/cloudflare-${SSL_NGINX_SITE}.ini"
+SSL_RENEW_HOOK="/etc/letsencrypt/renewal-hooks/deploy/wg-captive-nginx-reload"
 
 log() { printf '[wg-captive uninstall] %s\n' "$*"; }
 run() { "$@" >/dev/null 2>&1 || true; }
@@ -109,6 +113,8 @@ remove_files() {
   rm -f /usr/local/bin/wg-captive-admin
   rm -f /usr/local/bin/wg-captive-update
   rm -f /usr/local/bin/captive_update
+  rm -f /usr/local/bin/wg-captive-ssl-cloudflare
+  rm -f /usr/local/bin/captive_ssl_cloudflare
   rm -rf "$APP_LIB_DIR"
   rm -rf /opt/wg-captive-agent
 
@@ -119,6 +125,11 @@ remove_files() {
   rm -f "$RELAY_EXIT_CONF"
   rm -f "$RELAY_ROUTE_FLAG"
   rm -f /etc/sysctl.d/99-wg-captive-relay.conf
+  rm -f "$SSL_CONFIG_FILE"
+  rm -f "$SSL_CF_CREDENTIALS_FILE"
+  rm -f "$SSL_RENEW_HOOK"
+  rm -f "/etc/nginx/sites-enabled/${SSL_NGINX_SITE}"
+  rm -f "/etc/nginx/sites-available/${SSL_NGINX_SITE}"
 
   if [[ "${KEEP_BACKUPS:-0}" != "1" ]]; then
     rm -rf "$BACKUP_DIR"

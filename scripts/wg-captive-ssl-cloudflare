@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_FILE="/etc/wg-captive-ssl-cloudflare.env"
+UPSTREAM_HOST="127.0.0.1"
+UPSTREAM_PORT="51822"
+NGINX_SITE_NAME="wg-captive-admin"
+CF_CREDENTIALS_FILE="/etc/letsencrypt/cloudflare-${NGINX_SITE_NAME}.ini"
+RENEW_HOOK="/etc/letsencrypt/renewal-hooks/deploy/wg-captive-nginx-reload"
+
+log() { printf '[wg-captive ssl] %s\n' "$*"; }
+fail() { printf '[wg-captive ssl] ERROR: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+Usage:
+  sudo captive_ssl_cloudflare
+
+The tool always asks for:
+  1. Domain
+  2. Email
+  3. Cloudflare API token
+
+Cloudflare token needs:
+  Zone.Zone:Read
+  Zone.DNS:Edit
+  Scope: the zone that contains the domain
+EOF
+}
+
+shell_escape() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+prompt_required() {
+  local var_name="$1"
+  local label="$2"
+  local secret="${3:-0}"
+  local value=""
+  while [[ -z "$value" ]]; do
+    if [[ "$secret" == "1" ]]; then
+      printf '%s: ' "$label" >&2
+      read -r -s value
+      printf '\n' >&2
+    else
+      read -r -p "${label}: " value
+    fi
+    value="$(printf '%s' "$value" | sed 's/^ *//;s/ *$//')"
+  done
+  printf -v "$var_name" '%s' "$value"
+}
+
+[[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && { usage; exit 0; }
+[[ "${EUID}" -eq 0 ]] || fail "Run as root with sudo"
+
+prompt_required DOMAIN "Domain"
+prompt_required EMAIL "Email"
+prompt_required CF_API_TOKEN "Cloudflare API token" 1
+
+[[ "$DOMAIN" =~ ^[A-Za-z0-9._-]+$ ]] || fail "Domain contains invalid characters"
+[[ "$EMAIL" == *@*.* ]] || fail "Email looks invalid"
+
+if ! command -v apt-get >/dev/null 2>&1; then
+  fail "This installer currently supports Debian/Ubuntu with apt-get"
+fi
+
+log "Installing nginx, certbot and Cloudflare DNS plugin"
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y nginx certbot python3-certbot-dns-cloudflare
+
+install -d -m 0755 "$(dirname "$CONFIG_FILE")"
+cat > "$CONFIG_FILE" <<EOF
+DOMAIN=$(shell_escape "$DOMAIN")
+EMAIL=$(shell_escape "$EMAIL")
+UPSTREAM_HOST=$(shell_escape "$UPSTREAM_HOST")
+UPSTREAM_PORT=$(shell_escape "$UPSTREAM_PORT")
+NGINX_SITE_NAME=$(shell_escape "$NGINX_SITE_NAME")
+CF_CREDENTIALS_FILE=$(shell_escape "$CF_CREDENTIALS_FILE")
+EOF
+chmod 600 "$CONFIG_FILE"
+
+install -d -m 0700 "$(dirname "$CF_CREDENTIALS_FILE")"
+cat > "$CF_CREDENTIALS_FILE" <<EOF
+dns_cloudflare_api_token = ${CF_API_TOKEN}
+EOF
+chmod 600 "$CF_CREDENTIALS_FILE"
+
+log "Requesting Let's Encrypt certificate for ${DOMAIN} using Cloudflare DNS-01"
+certbot certonly \
+  --dns-cloudflare \
+  --dns-cloudflare-credentials "$CF_CREDENTIALS_FILE" \
+  --dns-cloudflare-propagation-seconds 60 \
+  -d "$DOMAIN" \
+  --email "$EMAIL" \
+  --agree-tos \
+  --non-interactive \
+  --keep-until-expiring
+
+NGINX_CONF="/etc/nginx/sites-available/${NGINX_SITE_NAME}"
+log "Writing nginx reverse proxy ${NGINX_CONF}"
+cat > "$NGINX_CONF" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${DOMAIN};
+
+    ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+
+    location / {
+        proxy_pass http://${UPSTREAM_HOST}:${UPSTREAM_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+EOF
+
+ln -sf "$NGINX_CONF" "/etc/nginx/sites-enabled/${NGINX_SITE_NAME}"
+rm -f /etc/nginx/sites-enabled/default
+
+install -d -m 0755 "$(dirname "$RENEW_HOOK")"
+cat > "$RENEW_HOOK" <<'EOF'
+#!/usr/bin/env bash
+set -e
+systemctl reload nginx
+systemctl restart wg-captive-admin || true
+EOF
+chmod 755 "$RENEW_HOOK"
+
+log "Testing nginx config"
+nginx -t
+
+log "Reloading services"
+systemctl enable --now nginx
+systemctl reload nginx
+systemctl restart wg-captive-admin || true
+
+log "Done"
+log "Saved SSL config: ${CONFIG_FILE}"
+log "Admin/API HTTPS: https://${DOMAIN}"
+log "Certbot renewal will reload nginx automatically"
