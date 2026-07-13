@@ -7,10 +7,10 @@ Captive firewall agent cho cac WireGuard/wg-easy server, kem web admin de quan l
 - Doc danh sach client tu `wg0.json` cua wg-easy, fallback `wg0.conf`, roi sync ve SQLite.
 - Hien thi giao dien don gian theo phong cach wg-easy: ten, IP, trang thai, nut bat/tat captive.
 - Bat/tat user va han su dung bang SQLite, agent sync firewall tu DB.
-- Redirect HTTP port 80 cua router bi khoa ve `PORTAL_IP:80`.
-- Cho phep router bi khoa truy cap `PORTAL_IP:80` va `PORTAL_IP:443`.
+- Redirect HTTP port 80 cua router bi khoa ve portal host trong `PORTAL_URL` port 80.
+- Cho phep router bi khoa truy cap `PORTAL_IP` da duoc resolve tu `PORTAL_URL` khi bam Save Settings tren port 80/443.
 - Chan HTTPS toi noi khac, DNS-over-TLS `853`, DNS thuong `53` va traffic con lai.
-- Tab Settings de cau hinh portal IP, relay client subnet, Telegram backup, auto backup theo gio.
+- Tab Settings de cau hinh portal URL, relay client subnet, Telegram backup, auto backup theo gio.
 - Backup local `.tar.gz` gom `state-db`, `metadata`, `wg0` va `blocked-ips` runtime.
 - Gui backup len Telegram ngay sau khi tao neu da cau hinh bot token/chat ID.
 - Restore tu file backup upload len web admin.
@@ -28,8 +28,8 @@ WireGuard server + wg-captive-agent
         +-- active router: internet binh thuong
         |
         +-- blocked router:
-            - HTTP -> PORTAL_IP:80
-            - PORTAL_IP:80/443 duoc phep
+            - HTTP -> PORTAL_IP da luu:80
+            - PORTAL_IP da luu:80/443 duoc phep
             - TCP 443 toi noi khac bi chan
             - TCP 853 DoT bi chan
             - traffic con lai bi chan
@@ -95,7 +95,9 @@ File `/etc/wg-captive-agent.env`:
 ```bash
 WG_INTERFACE=wg0
 IPSET_NAME=wg_expired
-PORTAL_IP=203.0.113.10
+PORTAL_URL=https://portal.example.com
+# Optional fixed IP override if DNS cannot be used:
+# PORTAL_IP=203.0.113.10
 STATE_DB=/etc/wg-captive-agent.db
 EXPIRED_FILE=/etc/wg-captive-expired.txt
 WG_EASY_JSON=/etc/wireguard/wg0.json
@@ -153,7 +155,7 @@ Tab `Relay`:
 
 Tab `Settings`:
 
-- Cai dat `PORTAL_IP`, `SERVER_PUBLIC_IP` va `RELAY_CLIENT_SUBNET` cho relay route, mac dinh `10.8.0.0/24`.
+- Cai dat `PORTAL_URL`, `SERVER_PUBLIC_IP` va `RELAY_CLIENT_SUBNET` cho relay route, mac dinh `10.8.0.0/24`.
 - Cai dat Telegram bot token/chat ID.
 - Bat/tat gui backup len Telegram.
 - Bat/tat auto backup theo cac moc gio trong ngay, vi du `02:00,14:00`.
@@ -165,7 +167,7 @@ Tab `Settings`:
 Tu phien ban SQLite, du lieu chinh nam trong `STATE_DB`:
 
 - `client_state`: IP, ten client lay tu wg-easy `wg0.json`, public key, `disabled`, `expires_at` va `expired_at`.
-- `node_config`: cac setting chung cua node nhu portal IP, Telegram, DNS block, server IP.
+- `node_config`: cac setting chung cua node nhu portal URL, Telegram, DNS block, server IP.
 - `relay_config`: trang thai relay, subnet route, interface exit va noi dung WireGuard .conf da import.
 - `api_tokens`: cac token API cua node, dung cho central server/tool ben ngoai goi API.
 
@@ -289,7 +291,7 @@ Trang frontend hien tai dung object `API_ENDPOINTS` trong `web/wg-captive-admin.
 
 ## Co che auto pop-up
 
-He dieu hanh thuong goi cac URL HTTP de kiem tra captive portal. Khi router het han, agent DNAT moi request HTTP port 80 tu router do ve `PORTAL_IP:80`. Web portal HTTP nen tra HTML don gian, sau do tu chuyen sang HTTPS:
+He dieu hanh thuong goi cac URL HTTP de kiem tra captive portal. Khi admin bam Save Settings, web admin resolve host trong `PORTAL_URL` thanh IP va ghi vao `PORTAL_IP`. Khi router het han, agent chi doc `PORTAL_IP` da luu de DNAT moi request HTTP port 80 tu router do ve portal port 80. Web portal HTTP nen tra HTML don gian, sau do tu chuyen sang HTTPS:
 
 ```html
 <meta http-equiv="refresh" content="1; url=https://203.0.113.10/captive">
@@ -370,7 +372,8 @@ Script khong go cac package he thong nhu `nodejs`, `iptables`, `ipset`, `curl`, 
 ## Luu y
 
 - Repo nay khong tao portal nap tien cho khach hang.
-- `PORTAL_IP` la public IP cua portal ben ngoai.
+- `PORTAL_URL` la URL public cua portal ben ngoai, vi du `https://portal.example.com`.
+- `PORTAL_IP` la IP runtime duoc web admin ghi de moi khi bam Save Settings voi `PORTAL_URL`. Agent daemon khong resolve domain lien tuc.
 - Router da cau hinh DoT van xu ly duoc bang cach chan TCP 853 khi het han.
 - Web admin can quyen doc `WG_EASY_JSON` hoac docker exec vao `WG_EASY_CONTAINER`, ghi `EXPIRED_FILE`, `BACKUP_DIR` va chay `wg-captive-agent sync`.
 - Auto pop-up khong the dam bao 100% tren moi OS/thiet bi, nhung day la co che dung nhat khi khong can thiep router/client.

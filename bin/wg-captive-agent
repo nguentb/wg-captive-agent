@@ -11,6 +11,7 @@ fi
 WG_INTERFACE="${WG_INTERFACE:-wg0}"
 IPSET_NAME="${IPSET_NAME:-wg_expired}"
 PORTAL_IP="${PORTAL_IP:-}"
+PORTAL_URL="${PORTAL_URL:-}"
 EXPIRED_FILE="${EXPIRED_FILE:-/etc/wg-captive-expired.txt}"
 STATE_DB="${STATE_DB:-/etc/wg-captive-agent.db}"
 EXPIRED_URL="${EXPIRED_URL:-}"
@@ -53,6 +54,7 @@ db_config_value() {
 db_load_runtime_config() {
   local value
   value="$(db_config_value PORTAL_IP)"; [[ -n "$value" ]] && PORTAL_IP="$value"
+  value="$(db_config_value PORTAL_URL)"; [[ -n "$value" ]] && PORTAL_URL="$value"
   value="$(db_config_value BLOCK_DNS)"; [[ -n "$value" ]] && BLOCK_DNS="$value"
   value="$(db_config_value BLOCK_DOT)"; [[ -n "$value" ]] && BLOCK_DOT="$value"
   value="$(db_scalar "SELECT exit_if FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_EXIT_IF="$value"
@@ -82,7 +84,6 @@ db_clear_relay_conf() {
 }
 
 db_load_runtime_config
-
 NAT_CHAIN="WG_CAPTIVE_NAT"
 FILTER_CHAIN="WG_CAPTIVE_FILTER"
 NETNS_PID=""
@@ -110,7 +111,7 @@ require_root() {
 }
 
 require_config() {
-  [[ -n "$PORTAL_IP" ]] || die "PORTAL_IP is required"
+  [[ -n "$PORTAL_IP" ]] || die "PORTAL_IP is required; save Portal URL in admin first to resolve and store it"
 }
 
 resolve_netns() {
@@ -441,6 +442,7 @@ status() {
   echo "config: $CONFIG_FILE"
   echo "interface: $WG_INTERFACE"
   echo "ipset: $IPSET_NAME"
+  echo "portal_url: ${PORTAL_URL:-}"
   echo "portal_ip: $PORTAL_IP"
   echo "wg_easy_container: ${WG_EASY_CONTAINER:-host}"
   echo "docker_dns_ip: ${DOCKER_DNS_IP:-disabled}"
