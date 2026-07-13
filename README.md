@@ -55,12 +55,24 @@ sudo apt install -y iptables ipset curl tar nodejs util-linux wireguard-tools
 curl -fsSL https://raw.githubusercontent.com/nguentb/wg-captive-agent/main/scripts/install-remote.sh | sudo bash
 ```
 
+## Cap nhat
+
+Sau khi da cai bang link remote, server se co san 2 lenh update tuong duong:
+
+```bash
+sudo captive_update
+# hoac
+sudo wg-captive-update
+```
+
+Lenh nay tu tai ban moi nhat tren branch `main`, chay lai `install.sh`, giu nguyen `/etc/wg-captive-agent.env`, roi restart `wg-captive-agent` va `wg-captive-admin`.
+
 ## Cai dat thu cong
 
 ```bash
 git clone https://github.com/nguentb/wg-captive-agent.git
 cd wg-captive-agent
-chmod +x bin/wg-captive-agent install.sh uninstall.sh
+chmod +x bin/wg-captive-agent install.sh uninstall.sh scripts/wg-captive-update
 sudo ./install.sh
 sudo nano /etc/wg-captive-agent.env
 sudo systemctl enable --now wg-captive-agent

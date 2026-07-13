@@ -107,6 +107,8 @@ remove_files() {
   rm -f "$AGENT_BIN"
   rm -f /usr/local/bin/wg-captive-agent
   rm -f /usr/local/bin/wg-captive-admin
+  rm -f /usr/local/bin/wg-captive-update
+  rm -f /usr/local/bin/captive_update
   rm -rf "$APP_LIB_DIR"
   rm -rf /opt/wg-captive-agent
 

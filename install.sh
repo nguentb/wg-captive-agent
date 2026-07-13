@@ -12,6 +12,8 @@ if ! command -v sqlite3 >/dev/null 2>&1; then
 fi
 
 install -m 0755 bin/wg-captive-agent /usr/local/sbin/wg-captive-agent
+install -m 0755 scripts/wg-captive-update /usr/local/bin/wg-captive-update
+ln -sf /usr/local/bin/wg-captive-update /usr/local/bin/captive_update
 install -d -m 0755 /usr/local/lib/wg-captive-agent
 install -d -m 0755 /var/backups/wg-captive
 install -d -m 0755 /var/lib/wg-captive-agent
