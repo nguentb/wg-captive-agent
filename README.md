@@ -7,8 +7,8 @@ Captive firewall agent cho cac WireGuard/wg-easy server, kem web admin de quan l
 - Doc danh sach client tu `wg0.json` cua wg-easy, fallback `wg0.conf`, roi sync ve SQLite.
 - Hien thi giao dien don gian theo phong cach wg-easy: ten, IP, trang thai, nut bat/tat captive.
 - Bat/tat user va han su dung bang SQLite, agent sync firewall tu DB.
-- Redirect HTTP port 80 cua router bi khoa ve portal host trong `PORTAL_URL` port 80.
-- Cho phep router bi khoa truy cap `PORTAL_IP` da duoc resolve tu `PORTAL_URL` khi bam Save Settings tren port 80/443.
+- Redirect HTTP port 80 cua router bi khoa ve redirect service local, tao token 15 phut va tra `302` sang `PORTAL_URL?node=SERVER_NAME&token=...`.
+- Cho phep router bi khoa truy cap `PORTAL_IP` da duoc resolve tu `PORTAL_URL` khi bam Save Settings tren port 443.
 - Chan HTTPS toi noi khac, DNS-over-TLS `853`, DNS thuong `53` va traffic con lai.
 - Tab Settings de cau hinh portal URL, relay client subnet, Telegram backup, auto backup theo gio.
 - Backup local `.tar.gz` gom `state-db`, `metadata`, `wg0` va `blocked-ips` runtime.
@@ -28,8 +28,8 @@ WireGuard server + wg-captive-agent
         +-- active router: internet binh thuong
         |
         +-- blocked router:
-            - HTTP -> PORTAL_IP da luu:80
-            - PORTAL_IP da luu:80/443 duoc phep
+            - HTTP -> redirect service local -> PORTAL_URL?node=SERVER_NAME&token=...
+            - PORTAL_IP da luu:443 duoc phep
             - TCP 443 toi noi khac bi chan
             - TCP 853 DoT bi chan
             - traffic con lai bi chan
@@ -170,6 +170,7 @@ Tu phien ban SQLite, du lieu chinh nam trong `STATE_DB`:
 - `node_config`: cac setting chung cua node nhu portal URL, Telegram, DNS block, server IP.
 - `relay_config`: trang thai relay, subnet route, interface exit va noi dung WireGuard .conf da import.
 - `api_tokens`: cac token API cua node, dung cho central server/tool ben ngoai goi API.
+- `captive_redirect_tokens`: token random tam thoi cho portal tra cuu user khi node redirect captive, mac dinh het han sau 15 phut.
 
 Khong con che do tuong thich JSON cu cho `disabled`/`expiry`; cai dat moi se dung SQLite lam nguon du lieu chinh. `expires_at` la lich het han, `expired_at` la luc backend da dua user vao trang thai expired. `EXPIRED_FILE` chi la output runtime cho firewall.
 
@@ -272,6 +273,7 @@ GET  /api/v1/state
 GET  /api/v1/clients
 POST /api/v1/clients/{ip}/status      { "status": "active" | "disabled" }
 POST /api/v1/clients/{ip}/expiry      { "expires_at": "2026-08-01T00:00:00.000Z" }
+GET  /api/v1/captive-token/{token}
 POST /api/v1/expiry/check
 GET  /api/v1/settings
 POST /api/v1/settings
@@ -291,13 +293,22 @@ Trang frontend hien tai dung object `API_ENDPOINTS` trong `web/wg-captive-admin.
 
 ## Co che auto pop-up
 
-He dieu hanh thuong goi cac URL HTTP de kiem tra captive portal. Khi admin bam Save Settings, web admin resolve host trong `PORTAL_URL` thanh IP va ghi vao `PORTAL_IP`. Khi router het han, agent chi doc `PORTAL_IP` da luu de DNAT moi request HTTP port 80 tu router do ve portal port 80. Web portal HTTP nen tra HTML don gian, sau do tu chuyen sang HTTPS:
+He dieu hanh thuong goi cac URL HTTP de kiem tra captive portal. Khi admin bam Save Settings, web admin resolve host trong `PORTAL_URL` thanh IP va ghi vao `PORTAL_IP` de firewall cho phep user bi captive mo portal HTTPS.
 
-```html
-<meta http-equiv="refresh" content="1; url=https://203.0.113.10/captive">
+Khi user bi `expired` hoac `disabled`, HTTP port 80 cua user se bi `REDIRECT` ve redirect service noi bo tren node, mac dinh `CAPTIVE_REDIRECT_PORT=51823`. Service nay doc IP WireGuard client tu ket noi, tao token random luu vao SQLite trong bang `captive_redirect_tokens`, token het han sau 15 phut, roi tra ve:
+
+```text
+302 Location: PORTAL_URL?node=SERVER_NAME&token=RANDOM_TOKEN
 ```
 
-Dieu kien quan trong: HTTPS theo IP can certificate co SAN dang `IP Address: 203.0.113.10`.
+Portal co the dung `node` de chon node API, roi goi:
+
+```text
+GET /api/v1/captive-token/RANDOM_TOKEN
+Authorization: Bearer NODE_API_TOKEN
+```
+
+Node se tra ve IP, ten user, trang thai va han dung neu token con hop le. Token het han duoc don theo lich `REDIRECT_TOKEN_CLEANUP_TIMES`, mac dinh `03:20,15:20`, khong phai polling lien tuc.
 
 ## Lenh van hanh
 

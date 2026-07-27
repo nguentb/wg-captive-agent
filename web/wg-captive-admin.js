@@ -13,11 +13,14 @@ const dns = require("dns").promises;
 const CONFIG_FILE = process.env.CONFIG_FILE || "/etc/wg-captive-agent.env";
 const HOST = process.env.ADMIN_HOST || "0.0.0.0";
 const PORT = Number(process.env.ADMIN_PORT || "51822");
+const CAPTIVE_REDIRECT_HOST = process.env.CAPTIVE_REDIRECT_HOST || "0.0.0.0";
+const CAPTIVE_REDIRECT_PORT = Number(process.env.CAPTIVE_REDIRECT_PORT || "51823");
 const PASSWORD = process.env.ADMIN_PASSWORD || "";
 const AGENT_BIN = process.env.AGENT_BIN || "/usr/local/sbin/wg-captive-agent";
 
 let lastAutoBackupKey = "";
 let expiryCheckTimer = null;
+let redirectTokenCleanupTimer = null;
 let syncQueue = Promise.resolve();
 let dbInitPath = "";
 
@@ -123,6 +126,17 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   prefix TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS captive_redirect_tokens (
+  token TEXT PRIMARY KEY,
+  client_ip TEXT NOT NULL,
+  node_name TEXT NOT NULL,
+  status TEXT NOT NULL,
+  client_name TEXT,
+  client_expires_at TEXT,
+  token_expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_captive_redirect_tokens_expires ON captive_redirect_tokens(token_expires_at);
 CREATE TABLE IF NOT EXISTS relay_config (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   enabled INTEGER NOT NULL DEFAULT 0,
@@ -149,6 +163,36 @@ function dbGetNodeConfig(config) {
   if (!dbAvailable(config)) return {};
   const rows = sqliteRows(config, "SELECT key, value FROM node_config");
   return Object.fromEntries(rows.map((row) => [row.key, row.value || ""]));
+}
+
+function dbCreateRedirectToken(config, clientIp) {
+  initDb(config);
+  const clients = loadClients(config);
+  const client = clients.find((item) => item.ip === clientIp) || { ip: clientIp, name: clientIp, status: "unknown", expires_at: "" };
+  const token = crypto.randomBytes(32).toString("base64url");
+  const tokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+  const nodeName = config.SERVER_NAME || os.hostname();
+  sqliteRaw(config,
+    `INSERT INTO captive_redirect_tokens(token,client_ip,node_name,status,client_name,client_expires_at,token_expires_at,created_at) VALUES(` +
+    `${sqlQuote(token)},${sqlQuote(client.ip)},${sqlQuote(nodeName)},${sqlQuote(client.status || "unknown")},${sqlQuote(client.name || client.ip)},${sqlQuote(client.expires_at || "")},${sqlQuote(tokenExpiresAt)},CURRENT_TIMESTAMP)`
+  );
+  return { token, token_expires_at: tokenExpiresAt, client };
+}
+
+function dbGetRedirectToken(config, token) {
+  if (!token || !dbAvailable(config)) return null;
+  const row = sqliteRows(config, `SELECT token, client_ip, node_name, status, client_name, client_expires_at, token_expires_at, created_at FROM captive_redirect_tokens WHERE token=${sqlQuote(token)} LIMIT 1`)[0] || null;
+  if (!row) return null;
+  if (Date.parse(row.token_expires_at) <= Date.now()) return null;
+  return row;
+}
+
+function dbDeleteExpiredRedirectTokens(config) {
+  if (!dbAvailable(config)) return { deleted: 0 };
+  const before = Number(sqliteRaw(config, "SELECT COUNT(*) FROM captive_redirect_tokens;").trim() || 0);
+  sqliteRaw(config, `DELETE FROM captive_redirect_tokens WHERE datetime(token_expires_at) <= datetime('now')`);
+  const after = Number(sqliteRaw(config, "SELECT COUNT(*) FROM captive_redirect_tokens;").trim() || 0);
+  return { deleted: Math.max(0, before - after) };
 }
 
 function dbGetRelayConfig(config) {
@@ -926,6 +970,7 @@ async function handleApi(req, res) {
       client_get: "GET /api/v1/clients/{ip}",
       client_status: "POST /api/v1/clients/{ip}/status { status: active|disabled }",
       client_expiry: "POST /api/v1/clients/{ip}/expiry { expires_at: ISO-8601 }",
+      captive_token: "GET /api/v1/captive-token/{token}",
       settings_get: "GET /api/v1/settings",
       settings_update: "POST /api/v1/settings",
       tokens_get: "GET /api/v1/tokens",
@@ -953,6 +998,26 @@ async function handleApi(req, res) {
     const client = loadClients(config).find((item) => item.ip === ip);
     if (!client) return sendJson(res, 404, { ok: false, error: "Client not found", ip });
     return sendJson(res, 200, { ok: true, client });
+  }
+  const captiveTokenMatch = pathname.match(/^\/api\/v1\/captive-token\/([^/]+)$/);
+  if (req.method === "GET" && captiveTokenMatch) {
+    const token = decodeURIComponent(captiveTokenMatch[1]);
+    const row = dbGetRedirectToken(config, token);
+    if (!row) return sendJson(res, 404, { ok: false, error: "Token not found or expired" });
+    const current = loadClients(config).find((item) => item.ip === row.client_ip) || null;
+    return sendJson(res, 200, {
+      ok: true,
+      token: { token_expires_at: row.token_expires_at, created_at: row.created_at },
+      client: {
+        node: row.node_name,
+        ip: row.client_ip,
+        name: current?.name || row.client_name || row.client_ip,
+        status: current?.status || row.status || "unknown",
+        expires_at: current?.expires_at || row.client_expires_at || "",
+        disabled: Boolean(current?.disabled),
+        expired: Boolean(current?.expired)
+      }
+    });
   }
   if (req.method === "GET" && pathname === "/api/v1/settings") return sendJson(res, 200, { ok: true, config });
   if (req.method === "GET" && pathname === "/api/v1/relay") return sendJson(res, 200, { ok: true, relay: relayStatus(config), config });
@@ -1025,7 +1090,7 @@ async function handleApi(req, res) {
 
   if (req.method === "POST" && (pathname === "/api/v1/settings" || pathname === "/api/settings")) {
     const body = await jsonBody();
-    const keys = ["PORTAL_URL","PORTAL_IP","SERVER_PUBLIC_IP","RELAY_CLIENT_SUBNET","BLOCK_DNS","BLOCK_DOT","TELEGRAM_BOT_TOKEN","TELEGRAM_CHAT_ID","TELEGRAM_BACKUP_ENABLED","AUTO_BACKUP_ENABLED","AUTO_BACKUP_TIMES","EXPIRY_CHECK_TIMES","EXPIRY_CHECK_ENABLED","ADMIN_API_TOKEN"];
+    const keys = ["PORTAL_URL","PORTAL_IP","SERVER_PUBLIC_IP","RELAY_CLIENT_SUBNET","BLOCK_DNS","BLOCK_DOT","TELEGRAM_BOT_TOKEN","TELEGRAM_CHAT_ID","TELEGRAM_BACKUP_ENABLED","AUTO_BACKUP_ENABLED","AUTO_BACKUP_TIMES","EXPIRY_CHECK_TIMES","EXPIRY_CHECK_ENABLED","REDIRECT_TOKEN_CLEANUP_TIMES","ADMIN_API_TOKEN"];
     const patch = {};
     for (const key of keys) if (body[key] !== undefined) patch[key] = String(body[key]).trim();
     if (patch.PORTAL_URL !== undefined) {
@@ -1039,6 +1104,7 @@ async function handleApi(req, res) {
     }
     saveConfigPatch(patch);
     if (body.EXPIRY_CHECK_TIMES !== undefined || body.EXPIRY_CHECK_ENABLED !== undefined) scheduleExpiryCheckLoop();
+    if (body.REDIRECT_TOKEN_CLEANUP_TIMES !== undefined) scheduleRedirectTokenCleanupLoop();
     const firewallKeys = ["PORTAL_URL","PORTAL_IP","BLOCK_DNS","BLOCK_DOT"];
     const result = firewallKeys.some((key) => body[key] !== undefined) ? await queueAgentSync() : undefined;
     return sendJson(res, 200, { ok: true, config: loadConfig(), result });
@@ -1134,6 +1200,83 @@ function scheduleExpiryCheckLoop() {
   }, delay);
   expiryCheckTimer.unref?.();
 }
+function normalizeRemoteIp(value) {
+  let ip = String(value || "").trim();
+  if (ip.startsWith("::ffff:")) ip = ip.slice(7);
+  if (ip === "::1") ip = "127.0.0.1";
+  return ip;
+}
+
+function portalBaseUrl(config) {
+  const raw = String(config.PORTAL_URL || "").trim();
+  if (!raw) return "";
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+}
+
+function captiveRedirectLocation(req) {
+  const config = loadConfig();
+  const base = portalBaseUrl(config);
+  if (!base) return "";
+  const ip = normalizeRemoteIp(req.socket.remoteAddress);
+  if (!isValidIp(ip)) return base;
+  const created = dbCreateRedirectToken(config, ip);
+  const target = new URL(base);
+  target.searchParams.set("node", config.SERVER_NAME || os.hostname());
+  target.searchParams.set("token", created.token);
+  return target.toString();
+}
+
+function handleCaptiveRedirect(req, res) {
+  try {
+    const location = captiveRedirectLocation(req);
+    if (!location) {
+      res.writeHead(503, noStoreHeaders({ "Content-Type": "text/plain; charset=utf-8" }));
+      return res.end("Portal URL is not configured");
+    }
+    res.writeHead(302, noStoreHeaders({ Location: location, "Content-Type": "text/plain; charset=utf-8" }));
+    return res.end(`Redirecting to ${location}\n`);
+  } catch (error) {
+    console.error("captive redirect failed", error);
+    res.writeHead(302, noStoreHeaders({ Location: portalBaseUrl(loadConfig()) || "/", "Content-Type": "text/plain; charset=utf-8" }));
+    return res.end("Redirecting\n");
+  }
+}
+
+function scheduleRedirectTokenCleanupLoop() {
+  if (redirectTokenCleanupTimer) {
+    clearTimeout(redirectTokenCleanupTimer);
+    redirectTokenCleanupTimer = null;
+  }
+  const config = loadConfig();
+  const next = nextScheduleFromTimes(config.REDIRECT_TOKEN_CLEANUP_TIMES || "03:20,15:20");
+  if (!next) return;
+  const delay = Math.max(1000, next.getTime() - Date.now());
+  redirectTokenCleanupTimer = setTimeout(() => {
+    try {
+      const result = dbDeleteExpiredRedirectTokens(loadConfig());
+      if (result.deleted) console.log(`redirect token cleanup: deleted ${result.deleted} expired token(s)`);
+    } catch (error) {
+      console.error("redirect token cleanup failed", error.message);
+    } finally {
+      scheduleRedirectTokenCleanupLoop();
+    }
+  }, delay);
+  redirectTokenCleanupTimer.unref?.();
+}
+
+function nextScheduleFromTimes(timesValue, now = new Date()) {
+  const times = scheduleTimes(timesValue, "");
+  if (!times.length) return null;
+  let next = null;
+  for (const item of times) {
+    const [hour, minute] = item.split(":").map(Number);
+    const candidate = new Date(now.getTime());
+    candidate.setHours(hour, minute, 0, 0);
+    if (candidate <= now) candidate.setDate(candidate.getDate() + 1);
+    if (!next || candidate < next) next = candidate;
+  }
+  return next;
+}
 function tickAutoBackup() {
   const config = loadConfig();
   if (config.AUTO_BACKUP_ENABLED !== "1") return;
@@ -1150,6 +1293,11 @@ http.createServer(handle).listen(PORT, HOST, () => {
   console.log(`wg-captive-admin listening on http://${HOST}:${PORT}`);
   setInterval(tickAutoBackup, 30000).unref();
   scheduleExpiryCheckLoop();
+  scheduleRedirectTokenCleanupLoop();
+});
+
+http.createServer(handleCaptiveRedirect).listen(CAPTIVE_REDIRECT_PORT, CAPTIVE_REDIRECT_HOST, () => {
+  console.log(`wg-captive-redirect listening on http://${CAPTIVE_REDIRECT_HOST}:${CAPTIVE_REDIRECT_PORT}`);
 });
 
 
