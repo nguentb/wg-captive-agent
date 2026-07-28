@@ -1090,9 +1090,12 @@ async function handleApi(req, res) {
 
   if (req.method === "POST" && (pathname === "/api/v1/settings" || pathname === "/api/settings")) {
     const body = await jsonBody();
-    const keys = ["PORTAL_URL","PORTAL_IP","SERVER_PUBLIC_IP","RELAY_CLIENT_SUBNET","BLOCK_DNS","BLOCK_DOT","TELEGRAM_BOT_TOKEN","TELEGRAM_CHAT_ID","TELEGRAM_BACKUP_ENABLED","AUTO_BACKUP_ENABLED","AUTO_BACKUP_TIMES","EXPIRY_CHECK_TIMES","EXPIRY_CHECK_ENABLED","REDIRECT_TOKEN_CLEANUP_TIMES","ADMIN_API_TOKEN"];
+    const keys = ["SERVER_NAME","PORTAL_URL","PORTAL_IP","SERVER_PUBLIC_IP","RELAY_CLIENT_SUBNET","BLOCK_DNS","BLOCK_DOT","TELEGRAM_BOT_TOKEN","TELEGRAM_CHAT_ID","TELEGRAM_BACKUP_ENABLED","AUTO_BACKUP_ENABLED","AUTO_BACKUP_TIMES","EXPIRY_CHECK_TIMES","EXPIRY_CHECK_ENABLED","REDIRECT_TOKEN_CLEANUP_TIMES","ADMIN_API_TOKEN"];
     const patch = {};
     for (const key of keys) if (body[key] !== undefined) patch[key] = String(body[key]).trim();
+    if (patch.SERVER_NAME !== undefined && !/^[A-Za-z0-9_.-]{1,80}$/.test(patch.SERVER_NAME)) {
+      return sendJson(res, 400, { ok: false, error: "Server name must use only letters, numbers, dot, underscore, or hyphen" });
+    }
     if (patch.PORTAL_URL !== undefined) {
       try {
         const resolvedIp = await resolvePortalIp(patch.PORTAL_URL);
