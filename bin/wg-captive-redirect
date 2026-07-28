@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_FILE="${CONFIG_FILE:-/etc/wg-captive-agent.env}"
+APP_JS="${CAPTIVE_ADMIN_JS:-/usr/local/lib/wg-captive-agent/wg-captive-admin.js}"
+WG_EASY_CONTAINER="${WG_EASY_CONTAINER:-wg-easy}"
+CHECK_INTERVAL="${CAPTIVE_NETNS_CHECK_INTERVAL:-5}"
+CHILD_PID=""
+
+log() {
+  printf '[wg-captive redirect] %s\n' "$*"
+}
+
+fail() {
+  printf '[wg-captive redirect] ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+load_config() {
+  if [[ -f "$CONFIG_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$CONFIG_FILE"
+    set +a
+  fi
+  WG_EASY_CONTAINER="${WG_EASY_CONTAINER:-wg-easy}"
+}
+
+container_pid() {
+  docker inspect -f '{{.State.Pid}}' "$WG_EASY_CONTAINER" 2>/dev/null || true
+}
+
+stop_child() {
+  if [[ -n "$CHILD_PID" ]] && kill -0 "$CHILD_PID" 2>/dev/null; then
+    kill "$CHILD_PID" 2>/dev/null || true
+    wait "$CHILD_PID" 2>/dev/null || true
+  fi
+  CHILD_PID=""
+}
+
+on_signal() {
+  stop_child
+  exit 0
+}
+
+main() {
+  load_config
+  [[ -f "$APP_JS" ]] || fail "admin application not found: $APP_JS"
+  command -v node >/dev/null 2>&1 || fail "node is required"
+  export CAPTIVE_REDIRECT_ONLY=1
+
+  if [[ -z "$WG_EASY_CONTAINER" || "$WG_EASY_CONTAINER" == "host" ]]; then
+    log "starting in host network namespace"
+    exec node "$APP_JS"
+  fi
+
+  command -v docker >/dev/null 2>&1 || fail "docker is required"
+  command -v nsenter >/dev/null 2>&1 || fail "nsenter is required"
+
+  local target_pid
+  target_pid="$(container_pid)"
+  [[ -n "$target_pid" && "$target_pid" != "0" ]] || fail "container '$WG_EASY_CONTAINER' is not running"
+
+  trap on_signal TERM INT
+  log "starting in network namespace of $WG_EASY_CONTAINER (pid $target_pid)"
+  nsenter -t "$target_pid" -n node "$APP_JS" &
+  CHILD_PID="$!"
+
+  while kill -0 "$CHILD_PID" 2>/dev/null; do
+    sleep "$CHECK_INTERVAL"
+    local current_pid
+    current_pid="$(container_pid)"
+    if [[ "$current_pid" != "$target_pid" ]]; then
+      log "container network namespace changed; restarting service"
+      stop_child
+      exit 1
+    fi
+  done
+
+  wait "$CHILD_PID"
+}
+
+main "$@"

@@ -7,7 +7,7 @@ Captive firewall agent cho cac WireGuard/wg-easy server, kem web admin de quan l
 - Doc danh sach client tu `wg0.json` cua wg-easy, fallback `wg0.conf`, roi sync ve SQLite.
 - Hien thi giao dien don gian theo phong cach wg-easy: ten, IP, trang thai, nut bat/tat captive.
 - Bat/tat user va han su dung bang SQLite, agent sync firewall tu DB.
-- Redirect HTTP port 80 cua router bi khoa ve redirect service local, tao token 15 phut va tra `302` sang `PORTAL_URL?node=SERVER_NAME&token=...`.
+- Redirect HTTP port 80 cua router bi khoa ve service `wg-captive-redirect` chay trong network namespace cua `wg-easy`, tao token 15 phut va tra `302` sang `PORTAL_URL?node=SERVER_NAME&token=...`.
 - Cho phep router bi khoa truy cap `PORTAL_IP` da duoc resolve tu `PORTAL_URL` khi bam Save Settings tren port 443.
 - Chan HTTPS toi noi khac, DNS-over-TLS `853`, DNS thuong `53` va traffic con lai.
 - Tab Settings de cau hinh portal URL, relay client subnet, Telegram backup, auto backup theo gio.
@@ -28,7 +28,7 @@ WireGuard server + wg-captive-agent
         +-- active router: internet binh thuong
         |
         +-- blocked router:
-            - HTTP -> redirect service local -> PORTAL_URL?node=SERVER_NAME&token=...
+            - HTTP -> wg-captive-redirect trong netns wg-easy -> PORTAL_URL?node=SERVER_NAME&token=...
             - PORTAL_IP da luu:443 duoc phep
             - TCP 443 toi noi khac bi chan
             - TCP 853 DoT bi chan
@@ -65,18 +65,19 @@ sudo captive_update
 sudo wg-captive-update
 ```
 
-Lenh nay tu tai ban moi nhat tren branch `main`, chay lai `install.sh`, giu nguyen `/etc/wg-captive-agent.env`, roi restart `wg-captive-agent` va `wg-captive-admin`.
+Lenh nay tu tai ban moi nhat tren branch `main`, chay lai `install.sh`, giu nguyen `/etc/wg-captive-agent.env`, roi restart `wg-captive-agent`, `wg-captive-admin` va `wg-captive-redirect`.
 
 ## Cai dat thu cong
 
 ```bash
 git clone https://github.com/nguentb/wg-captive-agent.git
 cd wg-captive-agent
-chmod +x bin/wg-captive-agent install.sh uninstall.sh scripts/wg-captive-update
+chmod +x bin/wg-captive-agent bin/wg-captive-redirect install.sh uninstall.sh scripts/wg-captive-update
 sudo ./install.sh
 sudo nano /etc/wg-captive-agent.env
 sudo systemctl enable --now wg-captive-agent
 sudo systemctl enable --now wg-captive-admin
+sudo systemctl enable --now wg-captive-redirect
 sudo systemctl enable wg-captive-relay-restore
 ```
 
@@ -295,7 +296,7 @@ Trang frontend hien tai dung object `API_ENDPOINTS` trong `web/wg-captive-admin.
 
 He dieu hanh thuong goi cac URL HTTP de kiem tra captive portal. Khi admin bam Save Settings, web admin resolve host trong `PORTAL_URL` thanh IP va ghi vao `PORTAL_IP` de firewall cho phep user bi captive mo portal HTTPS.
 
-Khi user bi `expired` hoac `disabled`, HTTP port 80 cua user se bi `REDIRECT` ve redirect service noi bo tren node, mac dinh `CAPTIVE_REDIRECT_PORT=51823`. Service nay doc IP WireGuard client tu ket noi, tao token random luu vao SQLite trong bang `captive_redirect_tokens`, token het han sau 15 phut, roi tra ve:
+Khi user bi `expired` hoac `disabled`, HTTP port 80 cua user se bi `REDIRECT` trong network namespace cua container `wg-easy`, mac dinh den port `51823`. Service `wg-captive-redirect` cung chay trong namespace nay nen nhan dung IP WireGuard goc, tao token random luu vao SQLite trong bang `captive_redirect_tokens`, token het han sau 15 phut, roi tra ve:
 
 ```text
 302 Location: PORTAL_URL?node=SERVER_NAME&token=RANDOM_TOKEN
@@ -309,6 +310,8 @@ Authorization: Bearer NODE_API_TOKEN
 ```
 
 Node se tra ve IP, ten user, trang thai va han dung neu token con hop le. Token het han duoc don theo lich `REDIRECT_TOKEN_CLEANUP_TIMES`, mac dinh `03:20,15:20`, khong phai polling lien tuc.
+
+`wg-captive-redirect` theo doi PID cua container. Neu `wg-easy` restart va doi network namespace, service tu thoat de systemd khoi dong lai vao namespace moi.
 
 ## Lenh van hanh
 
@@ -324,9 +327,11 @@ Xem trang thai:
 ```bash
 sudo systemctl status wg-captive-agent
 sudo systemctl status wg-captive-admin
+sudo systemctl status wg-captive-redirect
 sudo ipset list wg_expired
 sudo iptables -t nat -S WG_CAPTIVE_NAT
 sudo iptables -S WG_CAPTIVE_FILTER
+sudo wg-captive-agent status
 ```
 
 Ap rule mot lan:

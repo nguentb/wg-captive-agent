@@ -99,6 +99,7 @@ stop_services() {
     log "Stopping systemd services"
     run systemctl disable --now wg-captive-agent.service
     run systemctl disable --now wg-captive-admin.service
+    run systemctl disable --now wg-captive-redirect.service
     run systemctl disable --now wg-captive-relay-restore.service
   fi
 }
@@ -107,8 +108,10 @@ remove_files() {
   log "Removing installed files and config"
   rm -f /etc/systemd/system/wg-captive-agent.service
   rm -f /etc/systemd/system/wg-captive-admin.service
+  rm -f /etc/systemd/system/wg-captive-redirect.service
   rm -f /etc/systemd/system/wg-captive-relay-restore.service
   rm -f "$AGENT_BIN"
+  rm -f /usr/local/sbin/wg-captive-redirect
   rm -f /usr/local/bin/wg-captive-agent
   rm -f /usr/local/bin/wg-captive-admin
   rm -f /usr/local/bin/wg-captive-update

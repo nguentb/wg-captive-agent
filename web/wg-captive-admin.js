@@ -1289,16 +1289,18 @@ function tickAutoBackup() {
   createBackup(config, true).catch((error) => console.error("auto backup failed", error.message));
 }
 
-http.createServer(handle).listen(PORT, HOST, () => {
-  console.log(`wg-captive-admin listening on http://${HOST}:${PORT}`);
-  setInterval(tickAutoBackup, 30000).unref();
-  scheduleExpiryCheckLoop();
-  scheduleRedirectTokenCleanupLoop();
-});
-
-http.createServer(handleCaptiveRedirect).listen(CAPTIVE_REDIRECT_PORT, CAPTIVE_REDIRECT_HOST, () => {
-  console.log(`wg-captive-redirect listening on http://${CAPTIVE_REDIRECT_HOST}:${CAPTIVE_REDIRECT_PORT}`);
-});
+if (process.env.CAPTIVE_REDIRECT_ONLY === "1") {
+  http.createServer(handleCaptiveRedirect).listen(CAPTIVE_REDIRECT_PORT, CAPTIVE_REDIRECT_HOST, () => {
+    console.log(`wg-captive-redirect listening on http://${CAPTIVE_REDIRECT_HOST}:${CAPTIVE_REDIRECT_PORT}`);
+  });
+} else {
+  http.createServer(handle).listen(PORT, HOST, () => {
+    console.log(`wg-captive-admin listening on http://${HOST}:${PORT}`);
+    setInterval(tickAutoBackup, 30000).unref();
+    scheduleExpiryCheckLoop();
+    scheduleRedirectTokenCleanupLoop();
+  });
+}
 
 
 

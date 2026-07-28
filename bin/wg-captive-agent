@@ -450,6 +450,11 @@ status() {
   echo "wg_easy_container: ${WG_EASY_CONTAINER:-host}"
   echo "docker_dns_ip: ${DOCKER_DNS_IP:-disabled}"
   echo "netns_pid: ${NETNS_PID:-host}"
+  if net_exec sh -c "ss -ltn 2>/dev/null | grep -q ':${CAPTIVE_REDIRECT_PORT} '"; then
+    echo "redirect_listener: listening"
+  else
+    echo "redirect_listener: missing"
+  fi
   echo
   ips list "$IPSET_NAME" 2>/dev/null || true
   echo

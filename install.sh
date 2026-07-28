@@ -12,6 +12,7 @@ if ! command -v sqlite3 >/dev/null 2>&1; then
 fi
 
 install -m 0755 bin/wg-captive-agent /usr/local/sbin/wg-captive-agent
+install -m 0755 bin/wg-captive-redirect /usr/local/sbin/wg-captive-redirect
 install -m 0755 scripts/wg-captive-update /usr/local/bin/wg-captive-update
 install -m 0755 scripts/wg-captive-ssl-cloudflare /usr/local/bin/wg-captive-ssl-cloudflare
 ln -sf /usr/local/bin/wg-captive-update /usr/local/bin/captive_update
@@ -31,14 +32,20 @@ fi
 
 install -m 0644 systemd/wg-captive-agent.service /etc/systemd/system/wg-captive-agent.service
 install -m 0644 systemd/wg-captive-admin.service /etc/systemd/system/wg-captive-admin.service
+install -m 0644 systemd/wg-captive-redirect.service /etc/systemd/system/wg-captive-redirect.service
 install -m 0644 systemd/wg-captive-relay-restore.service /etc/systemd/system/wg-captive-relay-restore.service
 
 systemctl daemon-reload
+
+if systemctl is-active --quiet wg-captive-admin.service; then
+  systemctl enable --now wg-captive-redirect.service
+fi
 
 echo "Installed wg-captive-agent."
 echo "Edit /etc/wg-captive-agent.env, then run:"
 echo "  systemctl enable --now wg-captive-agent"
 echo "  systemctl enable --now wg-captive-admin"
+echo "  systemctl enable --now wg-captive-redirect"
 echo "  systemctl enable wg-captive-relay-restore"
 
 

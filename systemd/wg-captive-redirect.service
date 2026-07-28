@@ -1,0 +1,14 @@
+[Unit]
+Description=WireGuard captive HTTP redirect service
+After=network-online.target docker.service wg-captive-admin.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/wg-captive-agent.env
+ExecStart=/usr/local/sbin/wg-captive-redirect
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
