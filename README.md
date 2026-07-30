@@ -39,7 +39,7 @@ WireGuard server + wg-captive-agent
 
 - Linux server chay WireGuard/wg-easy.
 - `iptables`, `ipset`, `curl`, `tar`, `nsenter` tu goi `util-linux`.
-- `nodejs` cho web admin.
+- `nodejs` 18+ cho web admin. Ubuntu 24.04 duoc khuyen nghi de repo he thong co san Node.js phu hop.
 - Quyen root.
 
 Ubuntu/Debian:
@@ -49,7 +49,58 @@ sudo apt update
 sudo apt install -y iptables ipset curl tar nodejs util-linux wireguard-tools
 ```
 
+## Cai moi tu dau
+
+1. Xac nhan wg-easy dang chay va ten container dung la `wg-easy`:
+
+```bash
+docker ps --format 'table {{.Names}}\t{{.Status}}' | grep wg-easy
+docker exec wg-easy sh -c 'test -f /etc/wireguard/wg0.json && echo wg0.json-ok || test -f /etc/wireguard/wg0.conf && echo wg0.conf-ok'
+```
+
+2. Cai agent bang branch `main`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nguentb/wg-captive-agent/main/scripts/install-remote.sh | sudo bash
+```
+
+3. Sua toi thieu mat khau admin. Cac duong dan wg-easy mac dinh da phu hop container `wg-easy`:
+
+```bash
+sudo nano /etc/wg-captive-agent.env
+```
+
+Can doi ngay:
+
+```text
+ADMIN_PASSWORD=mot-mat-khau-manh
+SERVER_NAME=ten-node-khong-trung-voi-node-khac
+```
+
+4. Restart va kiem tra ba service chay thuong truc:
+
+```bash
+sudo systemctl restart wg-captive-agent wg-captive-admin wg-captive-redirect
+sudo systemctl status wg-captive-agent wg-captive-admin wg-captive-redirect --no-pager
+sudo wg-captive-agent status
+```
+
+5. Mo `http://SERVER_IP:51822`, dang nhap, vao Settings, nhap `Portal URL` va bam Save. Tai thoi diem Save, backend resolve domain mot lan va luu IPv4 vao `PORTAL_IP`. Neu firewall cloud/UFW dang bat, chi mo TCP `51822` cho IP quan tri; khong can mo cong redirect `51823` ra Internet.
+
+6. Trong Settings tao API token cho portal. Tren trang `https://PORTAL_DOMAIN/admin`, them node voi cung `SERVER_NAME`, dia chi API cua node va token vua tao.
+
+7. Thu khoa mot client, sau do kiem tra HTTP redirect tu network namespace cua wg-easy:
+
+```bash
+PID=$(docker inspect -f '{{.State.Pid}}' wg-easy)
+sudo nsenter -t "$PID" -n curl -sSI http://127.0.0.1:51823/generate_204
+```
+
+Ket qua dung la `HTTP/1.1 302 Found` va `Location: https://PORTAL_DOMAIN/?node=...&token=...`.
+
 ## Cai dat nhanh
+
+Neu da hieu cac gia tri mac dinh, lenh cai dat van la:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nguentb/wg-captive-agent/main/scripts/install-remote.sh | sudo bash
@@ -104,6 +155,8 @@ EXPIRED_FILE=/etc/wg-captive-expired.txt
 WG_EASY_JSON=/etc/wireguard/wg0.json
 WG_EASY_CONTAINER=wg-easy
 WG_EASY_CONTAINER_JSON=/etc/wireguard/wg0.json
+WG_EASY_CONF=/etc/wireguard/wg0.conf
+WG_EASY_CONTAINER_CONF=/etc/wireguard/wg0.conf
 DOCKER_DNS_IP=172.17.0.1
 
 RELAY_ENABLED=0
@@ -131,6 +184,11 @@ ADMIN_HOST=0.0.0.0
 ADMIN_PORT=51822
 ADMIN_PASSWORD=change-this-password
 ADMIN_API_TOKEN=
+CAPTIVE_REDIRECT_PORT=51823
+CAPTIVE_NETNS_CHECK_INTERVAL=5
+REDIRECT_TOKEN_CLEANUP_TIMES=03:20,15:20
+EXPIRY_CHECK_ENABLED=1
+EXPIRY_CHECK_TIMES=00:10,12:10
 ```
 Luu y captive popup: nen de `BLOCK_DNS=0` va `BLOCK_DOT=0` de thiet bi resolve duoc cac domain kiem tra captive nhu `captive.apple.com`, `connectivitycheck.gstatic.com`, `neverssl.com`. Agent van chan web/traffic sau do bang firewall; DNS chi duoc mo de popup co co hoi kich hoat.
 
@@ -145,6 +203,8 @@ Tab `Captive`:
 - `disabled`: bi admin tat bang switch, luu trong `client_state.disabled`.
 - `expired`: da duoc job het han danh dau vao `client_state.expired_at`.
 - `EXPIRED_FILE` chi la file runtime agent xuat ra de firewall chan ca `disabled` va `expired`.
+- Nut `Dong bo client` doc lai nguon WireGuard ngay lap tuc. Tai lai trang Captive cung tu dong doi chieu nguon voi SQLite.
+- Client khong con trong `wg0.json`/`wg0.conf` duoc danh dau `source_present=0`, nhung khong bi xoa tu dong. Tab `Da xoa` hien cac client nay va chi tai do moi co nut thung rac xoa ban ghi SQLite. Neu nguon WireGuard dang loi/khong doc duoc, backend bo qua lan doi chieu va khong cho xoa.
 
 Tab `Relay`:
 
@@ -272,6 +332,9 @@ Neu dang truy cap web admin bang browser thi cookie login van dung duoc. Cac end
 GET  /api/v1
 GET  /api/v1/state
 GET  /api/v1/clients
+GET  /api/v1/clients/{ip}
+DELETE /api/v1/clients/{ip}             chi xoa khi client khong con trong wg0
+POST /api/v1/clients/sync               doi chieu wg0 voi SQLite
 POST /api/v1/clients/{ip}/status      { "status": "active" | "disabled" }
 POST /api/v1/clients/{ip}/expiry      { "expires_at": "2026-08-01T00:00:00.000Z" }
 GET  /api/v1/captive-token/{token}
@@ -389,7 +452,7 @@ Script khong go cac package he thong nhu `nodejs`, `iptables`, `ipset`, `curl`, 
 
 - Repo nay khong tao portal nap tien cho khach hang.
 - `PORTAL_URL` la URL public cua portal ben ngoai, vi du `https://portal.example.com`.
-- `PORTAL_IP` la IP runtime duoc web admin ghi de moi khi bam Save Settings voi `PORTAL_URL`. Agent daemon khong resolve domain lien tuc.
+- `PORTAL_IP` la mot IPv4 runtime duoc web admin ghi moi khi bam Save Settings voi `PORTAL_URL`. Agent daemon khong resolve domain lien tuc. Portal nen dung mot ban ghi A DNS-only tro thang ve server; khong bat Cloudflare proxy va khong dat nhieu A record khi agent van chi luu mot IP.
 - Router da cau hinh DoT van xu ly duoc bang cach chan TCP 853 khi het han.
 - Web admin can quyen doc `WG_EASY_JSON` hoac docker exec vao `WG_EASY_CONTAINER`, ghi `EXPIRED_FILE`, `BACKUP_DIR` va chay `wg-captive-agent sync`.
 - Auto pop-up khong the dam bao 100% tren moi OS/thiet bi, nhung day la co che dung nhat khi khong can thiep router/client.

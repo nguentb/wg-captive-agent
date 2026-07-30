@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+command -v node >/dev/null 2>&1 || { echo "Node.js 18+ is required." >&2; exit 1; }
+NODE_MAJOR="$(node -p 'parseInt(process.versions.node.split(".")[0], 10)' 2>/dev/null || echo 0)"
+[[ "$NODE_MAJOR" -ge 18 ]] || { echo "Node.js 18+ is required; current version is $(node -v)." >&2; exit 1; }
+node --check web/wg-captive-admin.js
+bash -n bin/wg-captive-agent bin/wg-captive-redirect
+
 if ! command -v sqlite3 >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update
@@ -23,8 +29,9 @@ install -d -m 0755 /var/lib/wg-captive-agent
 install -m 0755 web/wg-captive-admin.js /usr/local/lib/wg-captive-agent/wg-captive-admin.js
 
 if [[ ! -f /etc/wg-captive-agent.env ]]; then
-  install -m 0644 examples/wg-captive-agent.env /etc/wg-captive-agent.env
+  install -m 0600 examples/wg-captive-agent.env /etc/wg-captive-agent.env
 fi
+chmod 0600 /etc/wg-captive-agent.env
 
 if [[ ! -f /etc/wg-captive-expired.txt ]]; then
   install -m 0644 examples/wg-captive-expired.txt /etc/wg-captive-expired.txt

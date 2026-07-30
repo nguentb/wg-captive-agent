@@ -37,6 +37,10 @@ fi
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v tar >/dev/null 2>&1 || fail "tar is required"
 command -v node >/dev/null 2>&1 || fail "nodejs is required"
+NODE_MAJOR="$(node -p 'parseInt(process.versions.node.split(".")[0], 10)' 2>/dev/null || echo 0)"
+if [[ "$NODE_MAJOR" -lt 18 ]]; then
+  fail "Node.js 18+ is required; current version is $(node -v 2>/dev/null || echo unknown)"
+fi
 
 TMP_DIR="$(mktemp -d)"
 log "Downloading ${TARBALL_URL}"
