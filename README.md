@@ -212,7 +212,7 @@ Tab `Relay`:
 - File import duoc tu dong them/thay `Table = off` trong `[Interface]` de tranh wg-quick doi default route cua container.
 - `Start tunnel`/`Stop tunnel`/`Restart tunnel` quan ly interface `wg-exit` trong container `wg-easy`.
 - `Enable route`/`Disable route` tao route policy: `ip rule from RELAY_CLIENT_SUBNET table RELAY_ROUTE_TABLE`, default route qua `wg-exit`, va NAT MASQUERADE.
-- Khi captive dang bat, chain captive van xu ly user bi khoa truoc; user active moi di qua relay route.
+- Khi captive dang bat, agent mark IP trong ipset `wg_expired` va them rule uu tien cao cho ve bang route `main`, nen user bi khoa van mo popup/portal binh thuong ke ca khi relay route dang bat. User active moi di qua relay route.
 
 Tab `Settings`:
 
@@ -456,5 +456,4 @@ Script khong go cac package he thong nhu `nodejs`, `iptables`, `ipset`, `curl`, 
 - Router da cau hinh DoT van xu ly duoc bang cach chan TCP 853 khi het han.
 - Web admin can quyen doc `WG_EASY_JSON` hoac docker exec vao `WG_EASY_CONTAINER`, ghi `EXPIRED_FILE`, `BACKUP_DIR` va chay `wg-captive-agent sync`.
 - Auto pop-up khong the dam bao 100% tren moi OS/thiet bi, nhung day la co che dung nhat khi khong can thiep router/client.
-
 

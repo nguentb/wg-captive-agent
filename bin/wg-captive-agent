@@ -27,6 +27,9 @@ RELAY_CLIENT_SUBNET="${RELAY_CLIENT_SUBNET:-10.8.0.0/24}"
 RELAY_ROUTE_TABLE="${RELAY_ROUTE_TABLE:-200}"
 RELAY_EXIT_CONF="${RELAY_EXIT_CONF:-/etc/wg-captive-relay-exit.conf}"
 RELAY_ROUTE_FLAG="${RELAY_ROUTE_FLAG:-/etc/wg-captive-relay.enabled}"
+CAPTIVE_MARK="${CAPTIVE_MARK:-0x19}"
+CAPTIVE_MARK_PRIORITY="${CAPTIVE_MARK_PRIORITY:-1000}"
+RELAY_RULE_PRIORITY="${RELAY_RULE_PRIORITY:-2000}"
 
 sqlite_escape() {
   printf "%s" "$1" | sed "s/'/''/g"
@@ -87,6 +90,7 @@ db_clear_relay_conf() {
 db_load_runtime_config
 NAT_CHAIN="WG_CAPTIVE_NAT"
 FILTER_CHAIN="WG_CAPTIVE_FILTER"
+MARK_CHAIN="WG_CAPTIVE_MARK"
 NETNS_PID=""
 
 usage() {
@@ -185,15 +189,19 @@ ensure_firewall() {
 
   ensure_chain nat "$NAT_CHAIN"
   ensure_chain filter "$FILTER_CHAIN"
+  ensure_chain mangle "$MARK_CHAIN"
 
   iptables_append_once nat PREROUTING -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN"
   iptables_append_once nat PREROUTING -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN"
+  iptables_insert_once mangle PREROUTING -m set --match-set "$IPSET_NAME" src -j "$MARK_CHAIN"
   iptables_insert_once filter FORWARD -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$FILTER_CHAIN"
   iptables_insert_once filter FORWARD -m set --match-set "$IPSET_NAME" src -j "$FILTER_CHAIN"
 
   ipt -t nat -F "$NAT_CHAIN"
   ipt -t filter -F "$FILTER_CHAIN"
+  ipt -t mangle -F "$MARK_CHAIN"
 
+  ipt -t mangle -A "$MARK_CHAIN" -j MARK --set-mark "$CAPTIVE_MARK"
   ipt -t nat -A "$NAT_CHAIN" -p tcp --dport 80 -j REDIRECT --to-ports "$CAPTIVE_REDIRECT_PORT"
 
   ipt -t filter -A "$FILTER_CHAIN" -d "$PORTAL_IP" -p tcp --dport 80 -j ACCEPT
@@ -246,6 +254,16 @@ relay_ensure_forward() {
   relay_exec "sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true"
 }
 
+relay_ensure_captive_mark() {
+  relay_exec "
+ipset create '$IPSET_NAME' hash:ip -exist
+iptables -t mangle -N '$MARK_CHAIN' 2>/dev/null || true
+iptables -t mangle -C PREROUTING -m set --match-set '$IPSET_NAME' src -j '$MARK_CHAIN' 2>/dev/null || iptables -t mangle -I PREROUTING -m set --match-set '$IPSET_NAME' src -j '$MARK_CHAIN'
+iptables -t mangle -F '$MARK_CHAIN'
+iptables -t mangle -A '$MARK_CHAIN' -j MARK --set-mark '$CAPTIVE_MARK'
+"
+}
+
 relay_tunnel_up() {
   relay_copy_conf
   relay_exec "wg-quick down '$RELAY_EXIT_IF' 2>/dev/null || true"
@@ -260,6 +278,8 @@ relay_tunnel_down() {
 
 relay_route_off() {
   relay_exec "
+while ip rule del priority '$CAPTIVE_MARK_PRIORITY' fwmark '$CAPTIVE_MARK' table main 2>/dev/null; do :; done
+while ip rule del priority '$RELAY_RULE_PRIORITY' from '$RELAY_CLIENT_SUBNET' table '$RELAY_ROUTE_TABLE' 2>/dev/null; do :; done
 while ip rule del from '$RELAY_CLIENT_SUBNET' table '$RELAY_ROUTE_TABLE' 2>/dev/null; do :; done
 ip route flush table '$RELAY_ROUTE_TABLE' 2>/dev/null || true
 while iptables -t nat -D POSTROUTING -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j MASQUERADE 2>/dev/null; do :; done
@@ -276,6 +296,7 @@ relay_route_on() {
   db_write_relay_conf
   [[ -f "$RELAY_EXIT_CONF" ]] || die "import relay exit config before enabling route"
   relay_ensure_forward
+  relay_ensure_captive_mark
   relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1" || relay_tunnel_up
   relay_route_off >/dev/null 2>&1 || true
   relay_exec "
@@ -284,7 +305,8 @@ iptables -F WG_RELAY
 iptables -C FORWARD -j WG_RELAY 2>/dev/null || iptables -A FORWARD -j WG_RELAY
 iptables -A WG_RELAY -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j ACCEPT
 ip route add default dev '$RELAY_EXIT_IF' table '$RELAY_ROUTE_TABLE'
-ip rule add from '$RELAY_CLIENT_SUBNET' table '$RELAY_ROUTE_TABLE'
+ip rule add priority '$CAPTIVE_MARK_PRIORITY' fwmark '$CAPTIVE_MARK' table main
+ip rule add priority '$RELAY_RULE_PRIORITY' from '$RELAY_CLIENT_SUBNET' table '$RELAY_ROUTE_TABLE'
 iptables -t nat -A POSTROUTING -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j MASQUERADE
 "
   touch "$RELAY_ROUTE_FLAG"
@@ -366,6 +388,9 @@ relay_status() {
     echo "route: DISABLED"
   fi
   echo
+  echo "=== Policy rules ==="
+  relay_exec "ip rule show | grep -E 'fwmark $CAPTIVE_MARK|from $RELAY_CLIENT_SUBNET' || true"
+  echo
   echo "=== Route table $RELAY_ROUTE_TABLE ==="
   relay_exec "ip route show table '$RELAY_ROUTE_TABLE' 2>/dev/null || true"
   echo
@@ -423,6 +448,7 @@ cleanup() {
   resolve_netns
   ipt -t nat -D PREROUTING -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN" >/dev/null 2>&1 || true
   ipt -t nat -D PREROUTING -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN" >/dev/null 2>&1 || true
+  ipt -t mangle -D PREROUTING -m set --match-set "$IPSET_NAME" src -j "$MARK_CHAIN" >/dev/null 2>&1 || true
   ipt -t filter -D FORWARD -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$FILTER_CHAIN" >/dev/null 2>&1 || true
   ipt -t filter -D FORWARD -m set --match-set "$IPSET_NAME" src -j "$FILTER_CHAIN" >/dev/null 2>&1 || true
 
@@ -436,6 +462,11 @@ cleanup() {
     ipt -t filter -X "$FILTER_CHAIN"
   fi
 
+  if ipt -t mangle -nL "$MARK_CHAIN" >/dev/null 2>&1; then
+    ipt -t mangle -F "$MARK_CHAIN"
+    ipt -t mangle -X "$MARK_CHAIN"
+  fi
+
   ips destroy "$IPSET_NAME" >/dev/null 2>&1 || true
 }
 
@@ -447,6 +478,7 @@ status() {
   echo "portal_url: ${PORTAL_URL:-}"
   echo "portal_ip: $PORTAL_IP"
   echo "redirect_port: $CAPTIVE_REDIRECT_PORT"
+  echo "captive_mark: $CAPTIVE_MARK"
   echo "wg_easy_container: ${WG_EASY_CONTAINER:-host}"
   echo "docker_dns_ip: ${DOCKER_DNS_IP:-disabled}"
   echo "netns_pid: ${NETNS_PID:-host}"
@@ -457,6 +489,9 @@ status() {
   fi
   echo
   ips list "$IPSET_NAME" 2>/dev/null || true
+  echo
+  ipt -t mangle -S PREROUTING 2>/dev/null | grep "$MARK_CHAIN" || true
+  ipt -t mangle -S "$MARK_CHAIN" 2>/dev/null || true
   echo
   echo
   ipt -t nat -S PREROUTING 2>/dev/null | grep "$NAT_CHAIN" || true

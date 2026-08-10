@@ -16,6 +16,9 @@ RELAY_CLIENT_SUBNET="10.8.0.0/24"
 RELAY_ROUTE_TABLE="200"
 RELAY_EXIT_CONF="/etc/wg-captive-relay-exit.conf"
 RELAY_ROUTE_FLAG="/etc/wg-captive-relay.enabled"
+CAPTIVE_MARK="0x19"
+CAPTIVE_MARK_PRIORITY="1000"
+RELAY_RULE_PRIORITY="2000"
 SSL_CONFIG_FILE="/etc/wg-captive-ssl-cloudflare.env"
 SSL_NGINX_SITE="wg-captive-admin"
 SSL_CF_CREDENTIALS_FILE="/etc/letsencrypt/cloudflare-${SSL_NGINX_SITE}.ini"
@@ -68,10 +71,13 @@ remove_captive_rules() {
   log "Removing captive firewall rules"
   netns_run iptables -t nat -D PREROUTING -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j WG_CAPTIVE_NAT
   netns_run iptables -t nat -D PREROUTING -m set --match-set "$IPSET_NAME" src -j WG_CAPTIVE_NAT
+  netns_run iptables -t mangle -D PREROUTING -m set --match-set "$IPSET_NAME" src -j WG_CAPTIVE_MARK
   netns_run iptables -D FORWARD -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j WG_CAPTIVE_FILTER
   netns_run iptables -D FORWARD -m set --match-set "$IPSET_NAME" src -j WG_CAPTIVE_FILTER
   netns_run iptables -t nat -F WG_CAPTIVE_NAT
   netns_run iptables -t nat -X WG_CAPTIVE_NAT
+  netns_run iptables -t mangle -F WG_CAPTIVE_MARK
+  netns_run iptables -t mangle -X WG_CAPTIVE_MARK
   netns_run iptables -F WG_CAPTIVE_FILTER
   netns_run iptables -X WG_CAPTIVE_FILTER
   netns_run ipset destroy "$IPSET_NAME"
@@ -85,6 +91,8 @@ remove_relay_rules() {
   fi
 
   relay_shell "wg-quick down '$RELAY_EXIT_IF' 2>/dev/null || true"
+  relay_shell "while ip rule del priority '$CAPTIVE_MARK_PRIORITY' fwmark '$CAPTIVE_MARK' table main 2>/dev/null; do :; done"
+  relay_shell "while ip rule del priority '$RELAY_RULE_PRIORITY' from '$RELAY_CLIENT_SUBNET' table '$RELAY_ROUTE_TABLE' 2>/dev/null; do :; done"
   relay_shell "while ip rule del from '$RELAY_CLIENT_SUBNET' table '$RELAY_ROUTE_TABLE' 2>/dev/null; do :; done"
   relay_shell "ip route flush table '$RELAY_ROUTE_TABLE' 2>/dev/null || true"
   relay_shell "while iptables -t nat -D POSTROUTING -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j MASQUERADE 2>/dev/null; do :; done"
