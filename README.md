@@ -205,6 +205,7 @@ Tab `Captive`:
 - `EXPIRED_FILE` chi la file runtime agent xuat ra de firewall chan ca `disabled` va `expired`.
 - Nut `Dong bo client` doc lai nguon WireGuard ngay lap tuc. Tai lai trang Captive cung tu dong doi chieu nguon voi SQLite.
 - Client khong con trong `wg0.json`/`wg0.conf` duoc danh dau `source_present=0`, nhung khong bi xoa tu dong. Tab `Da xoa` hien cac client nay va chi tai do moi co nut thung rac xoa ban ghi SQLite. Neu nguon WireGuard dang loi/khong doc duoc, backend bo qua lan doi chieu va khong cho xoa.
+- Danh sach client trong admin giu dung thu tu trong `wg0.json`/`wg0.conf`; IP nho hon nhung nam cuoi file se van nam cuoi danh sach.
 
 Tab `Relay`:
 
@@ -456,4 +457,3 @@ Script khong go cac package he thong nhu `nodejs`, `iptables`, `ipset`, `curl`, 
 - Router da cau hinh DoT van xu ly duoc bang cach chan TCP 853 khi het han.
 - Web admin can quyen doc `WG_EASY_JSON` hoac docker exec vao `WG_EASY_CONTAINER`, ghi `EXPIRED_FILE`, `BACKUP_DIR` va chay `wg-captive-agent sync`.
 - Auto pop-up khong the dam bao 100% tren moi OS/thiet bi, nhung day la co che dung nhat khi khong can thiep router/client.
-

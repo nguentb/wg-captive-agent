@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS client_state (
   disabled INTEGER NOT NULL DEFAULT 0,
   expires_at TEXT,
   expired_at TEXT,
+  source_order INTEGER NOT NULL DEFAULT 999999,
   source_present INTEGER NOT NULL DEFAULT 1,
   source_missing_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -153,6 +154,7 @@ CREATE TABLE IF NOT EXISTS relay_config (
 INSERT OR IGNORE INTO relay_config(id) VALUES(1);
 `);
   ensureDbColumn(config, "client_state", "expired_at", "TEXT");
+  ensureDbColumn(config, "client_state", "source_order", "INTEGER NOT NULL DEFAULT 999999");
   ensureDbColumn(config, "client_state", "source_present", "INTEGER NOT NULL DEFAULT 1");
   ensureDbColumn(config, "client_state", "source_missing_at", "TEXT");
   fs.chmodSync(db, 0o600);
@@ -524,7 +526,7 @@ function parseWgConfClients(text) {
     if (key === "allowedips") peer.ip = firstIp(value);
   }
   if (peer?.ip) clients.push(peer);
-  return clients.map((client) => ({ ...client, name: client.name || client.ip })).filter((client) => isValidIp(client.ip)).sort((a, b) => compareIp(a.ip, b.ip));
+  return clients.map((client, index) => ({ ...client, name: client.name || client.ip, source_order: index })).filter((client) => isValidIp(client.ip));
 }
 
 function parseWgEasyJsonClients(data) {
@@ -542,7 +544,7 @@ function parseWgEasyJsonClients(data) {
       public_key: raw.publicKey || raw.public_key || "",
     });
   }
-  return clients.sort((a, b) => compareIp(a.ip, b.ip));
+  return clients.map((client, index) => ({ ...client, source_order: index }));
 }
 
 function loadWgEasyClientSnapshot(config) {
@@ -566,18 +568,18 @@ function syncWgEasyClientsToDb(config) {
   const statements = [
     "UPDATE client_state SET source_present=0, source_missing_at=COALESCE(source_missing_at,CURRENT_TIMESTAMP)",
     ...clients.map((client) => (
-      `INSERT INTO client_state(ip,name,public_key,source_present,source_missing_at,updated_at) VALUES(${sqlQuote(client.ip)},${sqlQuote(client.name || client.ip)},${sqlQuote(client.public_key || "")},1,NULL,CURRENT_TIMESTAMP) ` +
-      "ON CONFLICT(ip) DO UPDATE SET name=excluded.name, public_key=excluded.public_key, source_present=1, source_missing_at=NULL, updated_at=CURRENT_TIMESTAMP"
+      `INSERT INTO client_state(ip,name,public_key,source_order,source_present,source_missing_at,updated_at) VALUES(${sqlQuote(client.ip)},${sqlQuote(client.name || client.ip)},${sqlQuote(client.public_key || "")},${Number.isInteger(client.source_order) ? client.source_order : 999999},1,NULL,CURRENT_TIMESTAMP) ` +
+      "ON CONFLICT(ip) DO UPDATE SET name=excluded.name, public_key=excluded.public_key, source_order=excluded.source_order, source_present=1, source_missing_at=NULL, updated_at=CURRENT_TIMESTAMP"
     )),
   ];
   sqliteRaw(config, `BEGIN IMMEDIATE;\n${statements.join(";\n")};\nCOMMIT;`);
-  const missing = sqliteRows(config, "SELECT ip, name, source_missing_at FROM client_state WHERE source_present=0 ORDER BY ip").filter((row) => isValidIp(row.ip));
+  const missing = sqliteRows(config, "SELECT ip, name, source_missing_at FROM client_state WHERE source_present=0 ORDER BY source_order, ip").filter((row) => isValidIp(row.ip));
   return { ...snapshot, missing };
 }
 
 function loadDbClients(config) {
   if (!dbAvailable(config)) return [];
-  return sqliteRows(config, "SELECT ip, name, public_key, disabled, expires_at, source_present, source_missing_at, updated_at FROM client_state ORDER BY ip").filter((row) => isValidIp(row.ip));
+  return sqliteRows(config, "SELECT ip, name, public_key, disabled, expires_at, source_order, source_present, source_missing_at, updated_at FROM client_state ORDER BY source_present DESC, source_order ASC, rowid ASC, ip ASC").filter((row) => isValidIp(row.ip));
 }
 
 function dbDeleteMissingClient(config, ip) {
@@ -596,13 +598,13 @@ function loadClients(config) {
   const byIp = new Map();
   const dbClients = loadDbClients(config);
   if (dbClients.length) {
-    for (const row of dbClients) byIp.set(row.ip, { name: row.name || row.ip, ip: row.ip, enabled: true, updated_at: row.updated_at || "", public_key: row.public_key || "", source_present: Number(row.source_present) !== 0, source_missing_at: row.source_missing_at || "" });
+    for (const row of dbClients) byIp.set(row.ip, { name: row.name || row.ip, ip: row.ip, enabled: true, updated_at: row.updated_at || "", public_key: row.public_key || "", source_order: Number(row.source_order ?? 999999), source_present: Number(row.source_present) !== 0, source_missing_at: row.source_missing_at || "" });
   } else {
     for (const client of wgClients) byIp.set(client.ip, client);
   }
   for (const ip of state.blocked) if (!byIp.has(ip)) byIp.set(ip, { name: ip, ip, enabled: true, updated_at: "", public_key: "" });
   for (const ip of Object.keys(state.expiry)) if (isValidIp(ip) && !byIp.has(ip)) byIp.set(ip, { name: state.expiry[ip]?.name || ip, ip, enabled: true, updated_at: "", public_key: "" });
-  return [...byIp.values()].sort((a, b) => compareIp(a.ip, b.ip)).map((client) => {
+  return [...byIp.values()].sort((a, b) => Number(a.source_present === false) - Number(b.source_present === false) || (Number(a.source_order ?? 999999) - Number(b.source_order ?? 999999)) || compareIp(a.ip, b.ip)).map((client) => {
     const item = state.expiry[client.ip] || {};
     const disabled = state.disabled.has(client.ip);
     const expired = state.expired.has(client.ip);
