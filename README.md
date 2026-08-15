@@ -317,6 +317,126 @@ Token Cloudflare can quyen `Zone.Zone:Read` va `Zone.DNS:Edit` tren zone chua do
 
 Cai SSL khong anh huong WireGuard vi WireGuard dung UDP rieng, thuong la `51820`. wg-easy panel van co the tiep tuc chay HTTP nhu cu tren cong rieng cua no.
 
+## Cai SSL khi domain khong nam tren Cloudflare
+
+Neu domain khong dung Cloudflare hoac khong co Cloudflare API token, dung Let's Encrypt HTTP-01 qua nginx. Cach nay yeu cau:
+
+- DNS record `A` cua domain tro ve IPv4 public cua server captive.
+- Port TCP `80` mo ra Internet de Let's Encrypt xac minh domain.
+- Port HTTPS public cho admin, mac dinh `51822`, mo cho IP quan tri.
+- WireGuard UDP `51820` va wg-easy panel khong bi anh huong.
+
+Vi du domain la `wg2.example.com`, muon mo admin bang:
+
+```text
+https://wg2.example.com:51822
+```
+
+1. Cai nginx va certbot:
+
+```bash
+sudo apt update
+sudo apt install -y nginx certbot python3-certbot-nginx
+```
+
+2. Cho `wg-captive-admin` chi nghe noi bo, vi nginx se dung HTTPS public va proxy vao admin:
+
+```bash
+sudo sed -i '/^ADMIN_HOST=/d;/^ADMIN_PORT=/d' /etc/wg-captive-agent.env
+printf 'ADMIN_HOST=127.0.0.1\nADMIN_PORT=51824\n' | sudo tee -a /etc/wg-captive-agent.env
+sudo systemctl restart wg-captive-admin
+```
+
+3. Dam bao nginx co the chay HTTP port `80` de lay cert:
+
+```bash
+sudo mkdir -p /var/www/html
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Neu `nginx -t` loi do mot file site dang tro toi cert chua ton tai, hay tam thoi go site do khoi `sites-enabled`, lay cert xong roi bat lai.
+
+4. Lay cert Let's Encrypt bang webroot:
+
+```bash
+sudo certbot certonly --webroot -w /var/www/html -d wg2.example.com
+```
+
+Sau khi thanh cong, cert se nam o:
+
+```text
+/etc/letsencrypt/live/wg2.example.com/fullchain.pem
+/etc/letsencrypt/live/wg2.example.com/privkey.pem
+```
+
+Co the kiem tra ten thu muc cert that bang:
+
+```bash
+sudo ls -la /etc/letsencrypt/live/
+```
+
+5. Tao nginx reverse proxy cho admin/API:
+
+```bash
+sudo nano /etc/nginx/sites-available/wg-captive-admin
+```
+
+Noi dung, thay `wg2.example.com` bang domain that:
+
+```nginx
+server {
+    listen 80;
+    server_name wg2.example.com;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://$host:51822$request_uri;
+    }
+}
+
+server {
+    listen 51822 ssl http2;
+    server_name wg2.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/wg2.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/wg2.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:51824;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+```
+
+6. Bat site va reload nginx:
+
+```bash
+sudo ln -sf /etc/nginx/sites-available/wg-captive-admin /etc/nginx/sites-enabled/wg-captive-admin
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+7. Kiem tra tu dong gia han:
+
+```bash
+sudo certbot renew --dry-run
+sudo systemctl list-timers | grep certbot
+```
+
+Neu dry-run hien `Congratulations, all simulated renewals succeeded` va co `certbot.timer`, cert se tu gia han. Truy cap admin bang:
+
+```text
+https://wg2.example.com:51822
+```
+
 ## API v1
 
 Frontend web admin chi giao tiep voi backend qua API `/api/v1/*`. Central server sau nay co the goi cung API nay bang header:
