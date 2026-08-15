@@ -29,6 +29,7 @@ RELAY_EXIT_CONF="${RELAY_EXIT_CONF:-/etc/wg-captive-relay-exit.conf}"
 RELAY_ROUTE_FLAG="${RELAY_ROUTE_FLAG:-/etc/wg-captive-relay.enabled}"
 CAPTIVE_MARK="${CAPTIVE_MARK:-0x19}"
 CAPTIVE_MARK_PRIORITY="${CAPTIVE_MARK_PRIORITY:-1000}"
+RELAY_MARK="${RELAY_MARK:-0x20}"
 RELAY_RULE_PRIORITY="${RELAY_RULE_PRIORITY:-2000}"
 
 sqlite_escape() {
@@ -91,6 +92,7 @@ db_load_runtime_config
 NAT_CHAIN="WG_CAPTIVE_NAT"
 FILTER_CHAIN="WG_CAPTIVE_FILTER"
 MARK_CHAIN="WG_CAPTIVE_MARK"
+RELAY_MARK_CHAIN="WG_RELAY_MARK"
 NETNS_PID=""
 
 usage() {
@@ -264,6 +266,17 @@ iptables -t mangle -A '$MARK_CHAIN' -j MARK --set-mark '$CAPTIVE_MARK'
 "
 }
 
+relay_ensure_route_mark() {
+  relay_exec "
+ipset create '$IPSET_NAME' hash:ip -exist
+iptables -t mangle -N '$RELAY_MARK_CHAIN' 2>/dev/null || true
+iptables -t mangle -C PREROUTING -s '$RELAY_CLIENT_SUBNET' -j '$RELAY_MARK_CHAIN' 2>/dev/null || iptables -t mangle -A PREROUTING -s '$RELAY_CLIENT_SUBNET' -j '$RELAY_MARK_CHAIN'
+iptables -t mangle -F '$RELAY_MARK_CHAIN'
+iptables -t mangle -A '$RELAY_MARK_CHAIN' -m set --match-set '$IPSET_NAME' src -j RETURN
+iptables -t mangle -A '$RELAY_MARK_CHAIN' -j MARK --set-mark '$RELAY_MARK'
+"
+}
+
 relay_tunnel_up() {
   relay_copy_conf
   relay_exec "wg-quick down '$RELAY_EXIT_IF' 2>/dev/null || true"
@@ -279,10 +292,14 @@ relay_tunnel_down() {
 relay_route_off() {
   relay_exec "
 while ip rule del priority '$CAPTIVE_MARK_PRIORITY' fwmark '$CAPTIVE_MARK' table main 2>/dev/null; do :; done
+while ip rule del priority '$RELAY_RULE_PRIORITY' fwmark '$RELAY_MARK' table '$RELAY_ROUTE_TABLE' 2>/dev/null; do :; done
 while ip rule del priority '$RELAY_RULE_PRIORITY' from '$RELAY_CLIENT_SUBNET' table '$RELAY_ROUTE_TABLE' 2>/dev/null; do :; done
 while ip rule del from '$RELAY_CLIENT_SUBNET' table '$RELAY_ROUTE_TABLE' 2>/dev/null; do :; done
 ip route flush table '$RELAY_ROUTE_TABLE' 2>/dev/null || true
 while iptables -t nat -D POSTROUTING -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j MASQUERADE 2>/dev/null; do :; done
+while iptables -t mangle -D PREROUTING -s '$RELAY_CLIENT_SUBNET' -j '$RELAY_MARK_CHAIN' 2>/dev/null; do :; done
+iptables -t mangle -F '$RELAY_MARK_CHAIN' 2>/dev/null || true
+iptables -t mangle -X '$RELAY_MARK_CHAIN' 2>/dev/null || true
 while iptables -D FORWARD -j WG_RELAY 2>/dev/null; do :; done
 iptables -F WG_RELAY 2>/dev/null || true
 iptables -X WG_RELAY 2>/dev/null || true
@@ -297,16 +314,18 @@ relay_route_on() {
   [[ -f "$RELAY_EXIT_CONF" ]] || die "import relay exit config before enabling route"
   relay_ensure_forward
   relay_ensure_captive_mark
+  relay_ensure_route_mark
   relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1" || relay_tunnel_up
   relay_route_off >/dev/null 2>&1 || true
+  relay_ensure_captive_mark
+  relay_ensure_route_mark
   relay_exec "
 iptables -N WG_RELAY 2>/dev/null || true
 iptables -F WG_RELAY
 iptables -C FORWARD -j WG_RELAY 2>/dev/null || iptables -A FORWARD -j WG_RELAY
 iptables -A WG_RELAY -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j ACCEPT
 ip route add default dev '$RELAY_EXIT_IF' table '$RELAY_ROUTE_TABLE'
-ip rule add priority '$CAPTIVE_MARK_PRIORITY' fwmark '$CAPTIVE_MARK' table main
-ip rule add priority '$RELAY_RULE_PRIORITY' from '$RELAY_CLIENT_SUBNET' table '$RELAY_ROUTE_TABLE'
+ip rule add priority '$RELAY_RULE_PRIORITY' fwmark '$RELAY_MARK' table '$RELAY_ROUTE_TABLE'
 iptables -t nat -A POSTROUTING -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j MASQUERADE
 "
   touch "$RELAY_ROUTE_FLAG"
@@ -347,7 +366,7 @@ relay_delete_config() {
     tunnel_on=1
   fi
 
-  if relay_exec "ip rule show | grep -q 'from $RELAY_CLIENT_SUBNET lookup $RELAY_ROUTE_TABLE'"; then
+  if relay_exec "ip rule show | grep -Eq 'fwmark $RELAY_MARK lookup $RELAY_ROUTE_TABLE|from $RELAY_CLIENT_SUBNET lookup $RELAY_ROUTE_TABLE'"; then
     route_on=1
   fi
 
@@ -382,14 +401,18 @@ relay_status() {
   fi
   echo
   echo "=== Route ==="
-  if relay_exec "ip rule show | grep -q 'from $RELAY_CLIENT_SUBNET lookup $RELAY_ROUTE_TABLE'"; then
+  if relay_exec "ip rule show | grep -Eq 'fwmark $RELAY_MARK lookup $RELAY_ROUTE_TABLE|from $RELAY_CLIENT_SUBNET lookup $RELAY_ROUTE_TABLE'"; then
     echo "route: ENABLED"
   else
     echo "route: DISABLED"
   fi
   echo
   echo "=== Policy rules ==="
-  relay_exec "ip rule show | grep -E 'fwmark $CAPTIVE_MARK|from $RELAY_CLIENT_SUBNET' || true"
+  relay_exec "ip rule show | grep -E 'fwmark $CAPTIVE_MARK|fwmark $RELAY_MARK|from $RELAY_CLIENT_SUBNET' || true"
+  echo
+  echo "=== Relay mark chain ==="
+  relay_exec "iptables -t mangle -S PREROUTING | grep '$RELAY_MARK_CHAIN' || true"
+  relay_exec "iptables -t mangle -S '$RELAY_MARK_CHAIN' 2>/dev/null || true"
   echo
   echo "=== Route table $RELAY_ROUTE_TABLE ==="
   relay_exec "ip route show table '$RELAY_ROUTE_TABLE' 2>/dev/null || true"

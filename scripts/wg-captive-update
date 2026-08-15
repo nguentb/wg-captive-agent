@@ -49,6 +49,7 @@ systemctl enable --now wg-captive-admin
 systemctl enable --now wg-captive-redirect
 systemctl enable wg-captive-relay-restore
 systemctl restart wg-captive-admin wg-captive-redirect wg-captive-agent
+systemctl start wg-captive-relay-restore || true
 
 log "Update complete"
 systemctl --no-pager --lines=0 status wg-captive-agent wg-captive-admin wg-captive-redirect || true

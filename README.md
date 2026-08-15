@@ -212,8 +212,8 @@ Tab `Relay`:
 - Import file WireGuard client config `.conf` cua exit server.
 - File import duoc tu dong them/thay `Table = off` trong `[Interface]` de tranh wg-quick doi default route cua container.
 - `Start tunnel`/`Stop tunnel`/`Restart tunnel` quan ly interface `wg-exit` trong container `wg-easy`.
-- `Enable route`/`Disable route` tao route policy: `ip rule from RELAY_CLIENT_SUBNET table RELAY_ROUTE_TABLE`, default route qua `wg-exit`, va NAT MASQUERADE.
-- Khi captive dang bat, agent mark IP trong ipset `wg_expired` va them rule uu tien cao cho ve bang route `main`, nen user bi khoa van mo popup/portal binh thuong ke ca khi relay route dang bat. User active moi di qua relay route.
+- `Enable route`/`Disable route` tao mangle chain `WG_RELAY_MARK`: client trong `RELAY_CLIENT_SUBNET` se duoc mark de di qua table relay, nhung IP dang nam trong ipset `wg_expired` se bi bo qua truoc khi mark.
+- Vi relay chi route traffic da duoc `WG_RELAY_MARK`, user bi `disabled`/`expired` van giu co che captive popup/portal; user active moi di qua exit node.
 
 Tab `Settings`:
 

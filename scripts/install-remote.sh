@@ -58,6 +58,7 @@ systemctl enable --now wg-captive-agent
 systemctl enable --now wg-captive-admin
 systemctl enable --now wg-captive-redirect
 systemctl enable wg-captive-relay-restore
+systemctl start wg-captive-relay-restore || true
 
 SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 ADMIN_PORT="$(grep -E '^ADMIN_PORT=' /etc/wg-captive-agent.env 2>/dev/null | tail -n 1 | cut -d= -f2-)"
@@ -67,4 +68,3 @@ log "Installed successfully"
 log "Edit config: nano /etc/wg-captive-agent.env"
 log "Admin UI: http://${SERVER_IP:-SERVER_IP}:${ADMIN_PORT}"
 log "IMPORTANT: change ADMIN_PASSWORD before exposing the admin UI"
-
