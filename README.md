@@ -11,7 +11,7 @@ Captive firewall agent cho cac WireGuard/wg-easy server, kem web admin de quan l
 - Cho phep router bi khoa truy cap `PORTAL_IP` da duoc resolve tu `PORTAL_URL` khi bam Save Settings tren port 443.
 - Chan HTTPS toi noi khac, DNS-over-TLS `853`, DNS thuong `53` va traffic con lai.
 - Tab Settings de cau hinh portal URL, relay client subnet, Telegram backup, auto backup theo gio.
-- Backup local `.tar.gz` gom `state-db`, `metadata`, `wg0` va `blocked-ips` runtime.
+- Backup local `.tar.gz` gom `state-db`, `metadata` va `wg0.json`.
 - Gui backup len Telegram ngay sau khi tao neu da cau hinh bot token/chat ID.
 - Restore tu file backup upload len web admin.
 - Tab Relay de import WireGuard `.conf` cua exit server, tao tunnel `wg-exit` trong container `wg-easy`, va route traffic client qua exit node.
@@ -21,7 +21,7 @@ Captive firewall agent cho cac WireGuard/wg-easy server, kem web admin de quan l
 ```text
 Router Wi-Fi chay WireGuard
         |
-        | wg0
+        | wg0.json
         v
 WireGuard server + wg-captive-agent
         |
@@ -252,17 +252,15 @@ Co the tat job bang `EXPIRY_CHECK_ENABLED=0`. Central server co the goi thu cong
 Backup la file `.tar.gz` trong `BACKUP_DIR`, gom cac file:
 
 ```text
-blocked-ips
 metadata
-wg0
+wg0.json
 state-db
 ```
 
-`blocked-ips`: moi dong la mot IP WireGuard dang bi khoa, gom ca `disabled` va `expired`.
 
 `state-db`: ban sao SQLite gom cac bang `client_state`, `node_config`, `relay_config`, `api_tokens`.
 
-`wg0`: ban sao cua `wg0.json` tu wg-easy.
+`wg0.json`: ban sao cua `wg0.json` tu wg-easy.
 
 `metadata`: JSON gom thong tin chung:
 
@@ -280,7 +278,7 @@ state-db
 }
 ```
 
-Restore trong web admin yeu cau backup co `state-db`, sau do tao lai `EXPIRED_FILE` va sync firewall. File `wg0` chi nam trong backup de luu tru; neu can restore `wg0.json`, thuc hien qua panel cua wg-easy.
+Restore trong web admin yeu cau backup co `state-db`, sau do tao lai `EXPIRED_FILE` tu SQLite va sync firewall. File `wg0.json` chi nam trong backup de luu tru; neu can restore `wg0.json` that cua wg-easy, thuc hien qua panel cua wg-easy.
 
 
 ## Cai SSL cho node bang Cloudflare

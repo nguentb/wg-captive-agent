@@ -661,9 +661,8 @@ async function createBackup(config, sendTelegram = true) {
   const backupName = `wg-captive-${config.SERVER_NAME || os.hostname()}-${timestamp()}.tar.gz`.replace(/[^A-Za-z0-9_.-]/g, "_");
   const backupPath = path.join(backupDir, backupName);
 
-  fs.writeFileSync(path.join(workDir, "blocked-ips"), `${blocked.join("\n")}${blocked.length ? "\n" : ""}`);
   const wg0Content = readWgEasyJson(config);
-  fs.writeFileSync(path.join(workDir, "wg0"), wg0Content || "{}\n");
+  fs.writeFileSync(path.join(workDir, "wg0.json"), wg0Content || "{}\n");
   const dbPath = stateDbPath(config);
   const dbBackupName = "state-db";
   if (fs.existsSync(dbPath)) fs.copyFileSync(dbPath, path.join(workDir, dbBackupName));
@@ -680,7 +679,7 @@ async function createBackup(config, sendTelegram = true) {
   };
   fs.writeFileSync(path.join(workDir, "metadata"), `${JSON.stringify(metadata, null, 2)}\n`);
 
-  const backupFiles = ["blocked-ips", "metadata", "wg0"];
+  const backupFiles = ["metadata", "wg0.json"];
   if (fs.existsSync(path.join(workDir, "state-db"))) backupFiles.push("state-db");
   await execFilePromise("tar", ["-czf", backupPath, "-C", workDir, ...backupFiles]);
   fs.rmSync(workDir, { recursive: true, force: true });
@@ -729,8 +728,7 @@ async function restoreBackup(config, archiveBuffer) {
   const archive = path.join(workDir, "restore.tar.gz");
   fs.writeFileSync(archive, archiveBuffer);
   await execFilePromise("tar", ["-xzf", archive, "-C", workDir]);
-  const blockedFile = path.join(workDir, "blocked-ips");
-  const wg0File = path.join(workDir, "wg0");
+  const wg0File = path.join(workDir, "wg0.json");
   const stateDbFile = path.join(workDir, "state-db");
   if (!fs.existsSync(stateDbFile)) throw new Error("Backup does not contain SQLite state-db");
   const dbPath = stateDbPath(config);
@@ -739,7 +737,7 @@ async function restoreBackup(config, archiveBuffer) {
   fs.chmodSync(dbPath, 0o600);
   dbInitPath = "";
   blockedState(config);
-  const restored = { state_db: true, blocked_ips: fs.existsSync(blockedFile), wg0_present: fs.existsSync(wg0File), wg0_restored: false };
+  const restored = { state_db: true, wg0_json_present: fs.existsSync(wg0File), wg0_json_restored: false };
   fs.rmSync(workDir, { recursive: true, force: true });
   const sync = await queueAgentSync();
   return { ...restored, sync };
