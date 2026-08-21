@@ -912,9 +912,12 @@ function sendHtml(res, status, body) { res.writeHead(status, noStoreHeaders({ "C
 function sendJson(res, status, body) { res.writeHead(status, noStoreHeaders({ "Content-Type": "application/json; charset=utf-8" })); res.end(JSON.stringify(body)); }
 function redirect(res, location) { res.writeHead(303, noStoreHeaders({ Location: location })); res.end(); }
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#039;" }[char])); }
+function faviconSvg() {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#22d3ee"/><stop offset="1" stop-color="#2f6df6"/></linearGradient></defs><rect width="64" height="64" rx="16" fill="#0b1220"/><path fill="url(#g)" d="M18 14h8l6 28 6-28h8L36 50h-8L18 14Z"/><path fill="#20c76a" d="M45 39a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/><path fill="#f8fafc" d="M37 35v8l6-4-6-4Z"/></svg>`;
+}
 
 function page(title, content) {
-  return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title><style>${css()}</style></head><body>${content}</body></html>`;
+  return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><style>${css()}</style></head><body>${content}</body></html>`;
 }
 
 function loginPage(message = "") {
@@ -1212,6 +1215,10 @@ async function handleApi(req, res) {
 
 async function handle(req, res) {
   try {
+    if (req.method === "GET" && (req.url === "/favicon.svg" || req.url === "/favicon.ico")) {
+      res.writeHead(200, noStoreHeaders({ "Content-Type": "image/svg+xml; charset=utf-8" }));
+      return res.end(faviconSvg());
+    }
     if (req.url.startsWith("/api/")) return handleApi(req, res);
     if (req.method === "GET" && req.url === "/login") return isAuthenticated(req) ? redirect(res, "/") : sendHtml(res, 200, loginPage());
     if (req.method === "POST" && req.url === "/logout") {
