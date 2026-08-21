@@ -913,7 +913,7 @@ function sendJson(res, status, body) { res.writeHead(status, noStoreHeaders({ "C
 function redirect(res, location) { res.writeHead(303, noStoreHeaders({ Location: location })); res.end(); }
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#039;" }[char])); }
 function faviconSvg() {
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#22d3ee"/><stop offset="1" stop-color="#2f6df6"/></linearGradient></defs><rect width="64" height="64" rx="16" fill="#0b1220"/><path fill="url(#g)" d="M18 14h8l6 28 6-28h8L36 50h-8L18 14Z"/><path fill="#20c76a" d="M45 39a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/><path fill="#f8fafc" d="M37 35v8l6-4-6-4Z"/></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#22d3ee"/><stop offset="1" stop-color="#2f6df6"/></linearGradient></defs><rect width="64" height="64" rx="14" fill="#0b1220"/><rect x="6" y="6" width="52" height="52" rx="12" fill="#101827" stroke="#1e3449" stroke-width="2"/><text x="32" y="39" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="900" fill="url(#g)">WG</text><circle cx="49" cy="16" r="5" fill="#20c76a"/></svg>`;
 }
 
 function page(title, content) {
