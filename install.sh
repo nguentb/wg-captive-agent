@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-command -v node >/dev/null 2>&1 || { echo "Node.js 18+ is required." >&2; exit 1; }
+command -v node >/dev/null 2>&1 || { echo "Node.js 24 LTS is required." >&2; exit 1; }
 NODE_MAJOR="$(node -p 'parseInt(process.versions.node.split(".")[0], 10)' 2>/dev/null || echo 0)"
-[[ "$NODE_MAJOR" -ge 18 ]] || { echo "Node.js 18+ is required; current version is $(node -v)." >&2; exit 1; }
+[[ "$NODE_MAJOR" -ge 24 ]] || { echo "Node.js 24 LTS is required; current version is $(node -v)." >&2; exit 1; }
+AUTO_SELECT_FAMILY="$(node -p 'require("node:net").getDefaultAutoSelectFamily() ? "true" : "false"' 2>/dev/null || echo false)"
+[[ "$AUTO_SELECT_FAMILY" == "true" ]] || { echo "Node.js autoSelectFamily must be true; current value is ${AUTO_SELECT_FAMILY}." >&2; exit 1; }
 node --check web/wg-captive-admin.js
 bash -n bin/wg-captive-agent bin/wg-captive-redirect
 
@@ -54,5 +56,3 @@ echo "  systemctl enable --now wg-captive-agent"
 echo "  systemctl enable --now wg-captive-admin"
 echo "  systemctl enable --now wg-captive-redirect"
 echo "  systemctl enable wg-captive-relay-restore"
-
-

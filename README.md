@@ -39,15 +39,25 @@ WireGuard server + wg-captive-agent
 
 - Linux server chay WireGuard/wg-easy.
 - `iptables`, `ipset`, `curl`, `tar`, `nsenter` tu goi `util-linux`.
-- `nodejs` 18+ cho web admin. Ubuntu 24.04 duoc khuyen nghi de repo he thong co san Node.js phu hop.
+- `nodejs` 24 LTS cho web admin va backup Telegram. Ban Node 24 co co che ket noi moi tot hon khi server co ca IPv4/IPv6.
 - Quyen root.
 
 Ubuntu/Debian:
 
 ```bash
 sudo apt update
-sudo apt install -y iptables ipset curl tar nodejs util-linux wireguard-tools
+sudo apt install -y ca-certificates curl gnupg
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+sudo chmod 0644 /etc/apt/keyrings/nodesource.gpg
+echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
+sudo apt update
+sudo apt install -y iptables ipset tar nodejs util-linux wireguard-tools
+node -v
+node -p 'require("node:net").getDefaultAutoSelectFamily()'
 ```
+
+Lenh cuoi phai tra ve `true`. Neu khong phai `true`, khong nen tiep tuc cai vi backup Telegram co the bi ket khi server can tu chon IPv4/IPv6.
 
 ## Cai moi tu dau
 

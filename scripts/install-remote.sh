@@ -29,17 +29,28 @@ fi
 if command -v apt-get >/dev/null 2>&1; then
   log "Installing dependencies with apt-get"
   apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y iptables ipset curl tar nodejs ca-certificates util-linux wireguard-tools
+  DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg
+  install -d -m 0755 /etc/apt/keyrings
+  rm -f /etc/apt/keyrings/nodesource.gpg
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+  chmod 0644 /etc/apt/keyrings/nodesource.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y iptables ipset tar nodejs util-linux wireguard-tools
 else
-  log "apt-get not found; assuming iptables, ipset, curl, tar, nodejs and nsenter are already installed"
+  log "apt-get not found; assuming iptables, ipset, curl, tar, Node.js 24 LTS and nsenter are already installed"
 fi
 
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v tar >/dev/null 2>&1 || fail "tar is required"
-command -v node >/dev/null 2>&1 || fail "nodejs is required"
+command -v node >/dev/null 2>&1 || fail "Node.js 24 LTS is required"
 NODE_MAJOR="$(node -p 'parseInt(process.versions.node.split(".")[0], 10)' 2>/dev/null || echo 0)"
-if [[ "$NODE_MAJOR" -lt 18 ]]; then
-  fail "Node.js 18+ is required; current version is $(node -v 2>/dev/null || echo unknown)"
+if [[ "$NODE_MAJOR" -lt 24 ]]; then
+  fail "Node.js 24 LTS is required; current version is $(node -v 2>/dev/null || echo unknown)"
+fi
+AUTO_SELECT_FAMILY="$(node -p 'require("node:net").getDefaultAutoSelectFamily() ? "true" : "false"' 2>/dev/null || echo false)"
+if [[ "$AUTO_SELECT_FAMILY" != "true" ]]; then
+  fail "Node.js autoSelectFamily must be true; current value is ${AUTO_SELECT_FAMILY}"
 fi
 
 TMP_DIR="$(mktemp -d)"
