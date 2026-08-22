@@ -327,6 +327,27 @@ Token Cloudflare can quyen `Zone.Zone:Read` va `Zone.DNS:Edit` tren zone chua do
 
 Cai SSL khong anh huong WireGuard vi WireGuard dung UDP rieng, thuong la `51820`. wg-easy panel van co the tiep tuc chay HTTP nhu cu tren cong rieng cua no.
 
+### Go SSL va quay ve dang nhap bang IP
+
+Neu da cai SSL/nginx cho web admin node nhung muon quay ve nhu ban dau, chay:
+
+```bash
+sudo captive_ssl_remove
+```
+
+Lenh nay chi go cau hinh SSL/nginx cua `wg-captive-admin`, khong go agent, khong go WireGuard, khong go wg-easy. Sau khi chay xong admin se quay ve:
+
+```text
+http://SERVER_IP:51822
+```
+
+Script se dat lai:
+
+```text
+ADMIN_HOST=0.0.0.0
+ADMIN_PORT=51822
+```
+
 ## Cai SSL khi domain khong nam tren Cloudflare
 
 Neu domain khong dung Cloudflare hoac khong co Cloudflare API token, dung Let's Encrypt HTTP-01 qua nginx. Cach nay yeu cau:

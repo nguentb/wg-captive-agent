@@ -131,6 +131,8 @@ remove_files() {
   rm -f /usr/local/bin/captive_update
   rm -f /usr/local/bin/wg-captive-ssl-cloudflare
   rm -f /usr/local/bin/captive_ssl_cloudflare
+  rm -f /usr/local/bin/wg-captive-ssl-remove
+  rm -f /usr/local/bin/captive_ssl_remove
   rm -rf "$APP_LIB_DIR"
   rm -rf /opt/wg-captive-agent
 

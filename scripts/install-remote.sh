@@ -61,7 +61,7 @@ SRC_DIR="$(find "$TMP_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 [[ -n "$SRC_DIR" && -f "$SRC_DIR/install.sh" ]] || fail "Downloaded archive does not contain install.sh"
 
 cd "$SRC_DIR"
-chmod +x install.sh bin/wg-captive-agent bin/wg-captive-redirect uninstall.sh scripts/wg-captive-update scripts/wg-captive-ssl-cloudflare
+chmod +x install.sh bin/wg-captive-agent bin/wg-captive-redirect uninstall.sh scripts/wg-captive-update scripts/wg-captive-ssl-cloudflare scripts/wg-captive-ssl-remove
 log "Installing wg-captive-agent"
 ./install.sh
 

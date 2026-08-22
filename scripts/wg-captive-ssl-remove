@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+AGENT_ENV_FILE="/etc/wg-captive-agent.env"
+SSL_CONFIG_FILE="/etc/wg-captive-ssl-cloudflare.env"
+NGINX_SITE_NAME="wg-captive-admin"
+CF_CREDENTIALS_FILE="/etc/letsencrypt/cloudflare-${NGINX_SITE_NAME}.ini"
+RENEW_HOOK="/etc/letsencrypt/renewal-hooks/deploy/wg-captive-nginx-reload"
+
+log() { printf '[wg-captive ssl remove] %s\n' "$*"; }
+fail() { printf '[wg-captive ssl remove] ERROR: %s\n' "$*" >&2; exit 1; }
+
+if [[ "${EUID}" -ne 0 ]]; then
+  fail "Please run as root, for example: sudo captive_ssl_remove"
+fi
+
+set_env_value() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  touch "$file"
+  if grep -qE "^${key}=" "$file"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$file"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$file"
+  fi
+}
+
+log "Removing wg-captive admin nginx SSL proxy"
+rm -f "/etc/nginx/sites-enabled/${NGINX_SITE_NAME}"
+rm -f "/etc/nginx/sites-available/${NGINX_SITE_NAME}"
+rm -f "$SSL_CONFIG_FILE"
+rm -f "$CF_CREDENTIALS_FILE"
+rm -f "$RENEW_HOOK"
+
+log "Restoring admin HTTP listener on all interfaces"
+set_env_value "$AGENT_ENV_FILE" "ADMIN_HOST" "0.0.0.0"
+set_env_value "$AGENT_ENV_FILE" "ADMIN_PORT" "51822"
+chmod 0600 "$AGENT_ENV_FILE"
+
+if command -v nginx >/dev/null 2>&1; then
+  if nginx -t >/dev/null 2>&1; then
+    systemctl reload nginx >/dev/null 2>&1 || true
+  else
+    log "nginx config test failed; nginx was not reloaded"
+  fi
+fi
+
+systemctl restart wg-captive-admin >/dev/null 2>&1 || true
+
+SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+log "SSL proxy removed for wg-captive admin"
+log "Admin UI: http://${SERVER_IP:-SERVER_IP}:51822"
