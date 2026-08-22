@@ -83,9 +83,10 @@ sudo nano /etc/wg-captive-agent.env
 Can doi ngay:
 
 ```text
-ADMIN_PASSWORD=mot-mat-khau-manh
 SERVER_NAME=ten-node-khong-trung-voi-node-khac
 ```
+
+Khong dien mat khau tho vao env. Lan dau mo web admin, he thong se yeu cau tao password va luu `ADMIN_PASSWORD_HASH` vao `/etc/wg-captive-agent.env`.
 
 4. Restart va kiem tra ba service chay thuong truc:
 
@@ -148,7 +149,7 @@ Web admin mac dinh:
 http://SERVER_IP:51822
 ```
 
-Doi `ADMIN_PASSWORD` truoc khi public cong quan tri.
+Lan dau truy cap web admin se duoc yeu cau tao password. Password khong luu tho trong env; chi luu `ADMIN_PASSWORD_HASH`.
 
 ## Cau hinh
 
@@ -192,7 +193,7 @@ BLOCK_DOT=0
 
 ADMIN_HOST=0.0.0.0
 ADMIN_PORT=51822
-ADMIN_PASSWORD=change-this-password
+ADMIN_PASSWORD_HASH=
 ADMIN_API_TOKEN=
 CAPTIVE_REDIRECT_PORT=51823
 CAPTIVE_NETNS_CHECK_INTERVAL=5

@@ -35,6 +35,10 @@ install -m 0755 web/wg-captive-admin.js /usr/local/lib/wg-captive-agent/wg-capti
 if [[ ! -f /etc/wg-captive-agent.env ]]; then
   install -m 0600 examples/wg-captive-agent.env /etc/wg-captive-agent.env
 fi
+sed -i '/^ADMIN_PASSWORD=/d' /etc/wg-captive-agent.env
+if ! grep -qE '^ADMIN_PASSWORD_HASH=' /etc/wg-captive-agent.env; then
+  printf 'ADMIN_PASSWORD_HASH=\n' >> /etc/wg-captive-agent.env
+fi
 chmod 0600 /etc/wg-captive-agent.env
 
 if [[ ! -f /etc/wg-captive-expired.txt ]]; then

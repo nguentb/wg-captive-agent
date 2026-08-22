@@ -15,7 +15,6 @@ const HOST = process.env.ADMIN_HOST || "0.0.0.0";
 const PORT = Number(process.env.ADMIN_PORT || "51822");
 const CAPTIVE_REDIRECT_HOST = process.env.CAPTIVE_REDIRECT_HOST || "0.0.0.0";
 const CAPTIVE_REDIRECT_PORT = Number(process.env.CAPTIVE_REDIRECT_PORT || "51823");
-const PASSWORD = process.env.ADMIN_PASSWORD || "";
 const AGENT_BIN = process.env.AGENT_BIN || "/usr/local/sbin/wg-captive-agent";
 
 let lastAutoBackupKey = "";
@@ -249,6 +248,8 @@ function dbApiTokenMatches(config, token) {
   return sqliteRows(config, `SELECT id FROM api_tokens WHERE token=${sqlQuote(token)} LIMIT 1`).length > 0;
 }
 
+function publicConfig(config) { const out = { ...config }; delete out.ADMIN_PASSWORD; delete out.ADMIN_PASSWORD_HASH; delete out.ADMIN_SESSION_SECRET; return out; }
+
 function loadConfig() {
   const env = loadEnvConfig();
   const config = { ...env };
@@ -307,6 +308,49 @@ function saveConfigPatch(patch) {
   fs.writeFileSync(CONFIG_FILE, next.join("\n").replace(/\n*$/, "\n"));
 }
 
+function saveEnvPatch(patch, removeKeys = []) {
+  const existing = fs.existsSync(CONFIG_FILE) ? fs.readFileSync(CONFIG_FILE, "utf8") : "";
+  const remove = new Set(removeKeys);
+  const lines = existing.split(/\r?\n/);
+  const seen = new Set();
+  const next = [];
+  for (const line of lines) {
+    const match = line.match(/^(\s*)([A-Za-z_][A-Za-z0-9_]*)(=)(.*)$/);
+    if (!match) {
+      if (line !== "") next.push(line);
+      continue;
+    }
+    const key = match[2];
+    if (remove.has(key)) continue;
+    if (key in patch) {
+      seen.add(key);
+      next.push(`${key}=${shellValue(String(patch[key] || ""))}`);
+    } else {
+      next.push(line);
+    }
+  }
+  for (const [key, value] of Object.entries(patch)) if (!seen.has(key)) next.push(`${key}=${shellValue(String(value || ""))}`);
+  fs.writeFileSync(CONFIG_FILE, next.join("\n").replace(/\n*$/, "\n"), { mode: 0o600 });
+  try { fs.chmodSync(CONFIG_FILE, 0o600); } catch {}
+}
+
+function passwordHash() { return loadEnvConfig().ADMIN_PASSWORD_HASH || process.env.ADMIN_PASSWORD_HASH || ""; }
+function passwordHashConfigured() { return Boolean(passwordHash()); }
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("base64url");
+  const key = crypto.scryptSync(String(password), salt, 64).toString("base64url");
+  return `scrypt$${salt}$${key}`;
+}
+function verifyPassword(password, stored) {
+  const parts = String(stored || "").split("$");
+  if (parts.length !== 3 || parts[0] !== "scrypt") return false;
+  const expected = Buffer.from(parts[2], "base64url");
+  const actual = crypto.scryptSync(String(password), parts[1], expected.length);
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+function setInitialPassword(password) {
+  saveEnvPatch({ ADMIN_PASSWORD_HASH: hashPassword(password) }, ["ADMIN_PASSWORD"]);
+}
 function expiredFilePath(config) { return config.EXPIRED_FILE || "/etc/wg-captive-expired.txt"; }
 function wgEasyFilePath(config) { return config.WG_EASY_JSON || "/etc/wireguard/wg0.json"; }
 function wgEasyContainer(config) { return config.WG_EASY_CONTAINER || ""; }
@@ -893,9 +937,9 @@ function parseCookies(req) {
   return cookies;
 }
 
-function sessionSecret() { return process.env.ADMIN_SESSION_SECRET || crypto.createHash("sha256").update(`${PASSWORD}:${CONFIG_FILE}`).digest("hex"); }
+function sessionSecret() { return process.env.ADMIN_SESSION_SECRET || crypto.createHash("sha256").update(`${passwordHash()}:${CONFIG_FILE}`).digest("hex"); }
 function makeSessionToken() { return crypto.createHmac("sha256", sessionSecret()).update("admin").digest("hex"); }
-function isAuthenticated(req) { return !PASSWORD || parseCookies(req).wg_captive_admin === makeSessionToken(); }
+function isAuthenticated(req) { return passwordHashConfigured() && parseCookies(req).wg_captive_admin === makeSessionToken(); }
 function bearerToken(req) {
   const match = String(req.headers.authorization || "").match(/^Bearer\s+(.+)$/i);
   return match ? match[1].trim() : "";
@@ -920,8 +964,12 @@ function page(title, content) {
   return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><style>${css()}</style></head><body>${content}</body></html>`;
 }
 
+function loginTitle() { return `<h1 class="login-title"><span class="login-logo" aria-hidden="true">${faviconSvg()}</span><span>WireGuard Admin</span></h1>`; }
 function loginPage(message = "") {
-  return page("WireGuard Admin", `<main class="login-shell"><form class="login-card" method="post" action="/login"><h1 class="login-title"><span class="login-logo" aria-hidden="true">${faviconSvg()}</span><span>WireGuard Admin</span></h1>${message ? `<div class="alert">${escapeHtml(message)}</div>` : ""}<input type="password" name="password" placeholder="Password" autofocus><button type="submit">Login</button></form></main><script>window.addEventListener("pageshow",()=>{fetch("/api/state",{cache:"no-store"}).then((res)=>{if(res.ok)location.replace("/")}).catch(()=>{})});</script>`);
+  return page("WireGuard Admin", `<main class="login-shell"><form class="login-card" method="post" action="/login">${loginTitle()}${message ? `<div class="alert">${escapeHtml(message)}</div>` : ""}<input type="password" name="password" placeholder="Password" autofocus><button type="submit">Login</button></form></main><script>window.addEventListener("pageshow",()=>{fetch("/api/state",{cache:"no-store"}).then((res)=>{if(res.ok)location.replace("/")}).catch(()=>{})});</script>`);
+}
+function setupPasswordPage(message = "") {
+  return page("Create Password", `<main class="login-shell"><form class="login-card" method="post" action="/login">${loginTitle()}<p>Create admin password for this server.</p>${message ? `<div class="alert">${escapeHtml(message)}</div>` : ""}<input type="password" name="password" placeholder="New password" autofocus><input type="password" name="password_confirm" placeholder="Confirm password"><button type="submit">Create password</button></form></main>`);
 }
 
 function appPage() {
@@ -1039,7 +1087,7 @@ async function handleApi(req, res) {
   }
 
   if (req.method === "GET" && (pathname === "/api/v1/state" || pathname === "/api/state")) {
-    return sendJson(res, 200, { ok: true, config, clients: loadClients(config), relay: relayStatus(config), api_tokens: dbListApiTokens(config) });
+    return sendJson(res, 200, { ok: true, config: publicConfig(config), clients: loadClients(config), relay: relayStatus(config), api_tokens: dbListApiTokens(config) });
   }
   if (req.method === "GET" && pathname === "/api/v1/clients") return sendJson(res, 200, await clientsPayload());
   if (req.method === "POST" && pathname === "/api/v1/clients/sync") {
@@ -1087,8 +1135,8 @@ async function handleApi(req, res) {
       }
     });
   }
-  if (req.method === "GET" && pathname === "/api/v1/settings") return sendJson(res, 200, { ok: true, config });
-  if (req.method === "GET" && pathname === "/api/v1/relay") return sendJson(res, 200, { ok: true, relay: relayStatus(config), config });
+  if (req.method === "GET" && pathname === "/api/v1/settings") return sendJson(res, 200, { ok: true, config: publicConfig(config) });
+  if (req.method === "GET" && pathname === "/api/v1/relay") return sendJson(res, 200, { ok: true, relay: relayStatus(config), config: publicConfig(config) });
 
   if (req.method === "POST" && (pathname === "/api/v1/sync" || pathname === "/api/sync")) return sendJson(res, 200, { ok: true, result: await queueAgentSync() });
 
@@ -1178,7 +1226,7 @@ async function handleApi(req, res) {
     if (body.REDIRECT_TOKEN_CLEANUP_TIMES !== undefined) scheduleRedirectTokenCleanupLoop();
     const firewallKeys = ["PORTAL_URL","PORTAL_IP","BLOCK_DNS","BLOCK_DOT"];
     const result = firewallKeys.some((key) => body[key] !== undefined) ? await queueAgentSync() : undefined;
-    return sendJson(res, 200, { ok: true, config: loadConfig(), result });
+    return sendJson(res, 200, { ok: true, config: publicConfig(loadConfig()), result });
   }
 
   if (req.method === "POST" && (pathname === "/api/v1/relay/action" || pathname === "/api/relay/action" || pathname === "/api/relay/settings")) {
@@ -1192,7 +1240,7 @@ async function handleApi(req, res) {
     const nextConfig = loadConfig();
     const relay = relayStatus(nextConfig);
     relay.last_result = result;
-    return sendJson(res, 200, { ok: true, config: nextConfig, relay });
+    return sendJson(res, 200, { ok: true, config: publicConfig(nextConfig), relay });
   }
 
   if (req.method === "POST" && (pathname === "/api/v1/relay/import" || pathname === "/api/relay/import")) {
@@ -1200,7 +1248,7 @@ async function handleApi(req, res) {
     const file = parseMultipart(req, body, "relayConf");
     if (!file) return sendJson(res, 400, { ok: false, error: "Missing relay .conf file" });
     const relay = await importRelayConf(config, file);
-    return sendJson(res, 200, { ok: true, config: loadConfig(), relay });
+    return sendJson(res, 200, { ok: true, config: publicConfig(loadConfig()), relay });
   }
 
   if (req.method === "POST" && (pathname === "/api/v1/backup" || pathname === "/api/backup")) return sendJson(res, 200, { ok: true, backup: await createBackup(config, true) });
@@ -1220,14 +1268,26 @@ async function handle(req, res) {
       return res.end(faviconSvg());
     }
     if (req.url.startsWith("/api/")) return handleApi(req, res);
-    if (req.method === "GET" && req.url === "/login") return isAuthenticated(req) ? redirect(res, "/") : sendHtml(res, 200, loginPage());
+    if (req.method === "GET" && req.url === "/login") {
+      if (!passwordHashConfigured()) return sendHtml(res, 200, setupPasswordPage());
+      return isAuthenticated(req) ? redirect(res, "/") : sendHtml(res, 200, loginPage());
+    }
     if (req.method === "POST" && req.url === "/logout") {
       res.writeHead(303, noStoreHeaders({ "Set-Cookie": "wg_captive_admin=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0", Location: "/login" }));
       return res.end();
     }
     if (req.method === "POST" && req.url === "/login") {
       const params = new URLSearchParams(await readBody(req));
-      if (String(params.get("password") || "") !== PASSWORD) return sendHtml(res, 401, loginPage("Wrong password"));
+      const password = String(params.get("password") || "");
+      if (!passwordHashConfigured()) {
+        const confirm = String(params.get("password_confirm") || "");
+        if (password.length < 8) return sendHtml(res, 400, setupPasswordPage("Password must be at least 8 characters"));
+        if (password !== confirm) return sendHtml(res, 400, setupPasswordPage("Passwords do not match"));
+        setInitialPassword(password);
+        res.writeHead(303, noStoreHeaders({ "Set-Cookie": `wg_captive_admin=${makeSessionToken()}; HttpOnly; SameSite=Lax; Path=/`, Location: "/" }));
+        return res.end();
+      }
+      if (!verifyPassword(password, passwordHash())) return sendHtml(res, 401, loginPage("Wrong password"));
       res.writeHead(303, noStoreHeaders({ "Set-Cookie": `wg_captive_admin=${makeSessionToken()}; HttpOnly; SameSite=Lax; Path=/`, Location: "/" }));
       return res.end();
     }
