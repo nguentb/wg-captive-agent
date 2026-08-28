@@ -39,6 +39,18 @@ sed -i '/^ADMIN_PASSWORD=/d' /etc/wg-captive-agent.env
 if ! grep -qE '^ADMIN_PASSWORD_HASH=' /etc/wg-captive-agent.env; then
   printf 'ADMIN_PASSWORD_HASH=\n' >> /etc/wg-captive-agent.env
 fi
+hash_line="$(grep -m1 '^ADMIN_PASSWORD_HASH=' /etc/wg-captive-agent.env || true)"
+hash_value="${hash_line#ADMIN_PASSWORD_HASH=}"
+if [[ "$hash_value" == \"scrypt\$*\" && "$hash_value" == *\" ]]; then
+  hash_value="${hash_value#\"}"
+  hash_value="${hash_value%\"}"
+fi
+if [[ "$hash_value" == scrypt\$* ]]; then
+  tmp_env="$(mktemp)"
+  awk -v v="$hash_value" 'BEGIN{done=0} /^ADMIN_PASSWORD_HASH=/{ if(!done){ print "ADMIN_PASSWORD_HASH='\''" v "'\''"; done=1 } next } { print }' /etc/wg-captive-agent.env > "$tmp_env"
+  install -m 0600 "$tmp_env" /etc/wg-captive-agent.env
+  rm -f "$tmp_env"
+fi
 chmod 0600 /etc/wg-captive-agent.env
 
 if [[ ! -f /etc/wg-captive-expired.txt ]]; then
