@@ -224,6 +224,7 @@ Tab `Relay`:
 - File import duoc tu dong them/thay `Table = off` trong `[Interface]` de tranh wg-quick doi default route cua container.
 - `Start tunnel`/`Stop tunnel`/`Restart tunnel` quan ly interface `wg-exit` trong container `wg-easy`.
 - `Enable route`/`Disable route` tao mangle chain `WG_RELAY_MARK`: client trong `RELAY_CLIENT_SUBNET` se duoc mark de di qua table relay, nhung IP dang nam trong ipset `wg_expired` se bi bo qua truoc khi mark.
+- DNS cua client khong di qua exit: `udp/53`, `tcp/53` va `tcp/853` duoc bo qua trong chain relay mark, nen resolve DNS van xu ly tai node relay/duong ra mac dinh cua node.
 - Vi relay chi route traffic da duoc `WG_RELAY_MARK`, user bi `disabled`/`expired` van giu co che captive popup/portal; user active moi di qua exit node.
 
 Tab `Settings`:

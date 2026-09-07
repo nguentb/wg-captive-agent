@@ -273,6 +273,9 @@ iptables -t mangle -N '$RELAY_MARK_CHAIN' 2>/dev/null || true
 iptables -t mangle -C PREROUTING -s '$RELAY_CLIENT_SUBNET' -j '$RELAY_MARK_CHAIN' 2>/dev/null || iptables -t mangle -A PREROUTING -s '$RELAY_CLIENT_SUBNET' -j '$RELAY_MARK_CHAIN'
 iptables -t mangle -F '$RELAY_MARK_CHAIN'
 iptables -t mangle -A '$RELAY_MARK_CHAIN' -m set --match-set '$IPSET_NAME' src -j RETURN
+iptables -t mangle -A '$RELAY_MARK_CHAIN' -p udp --dport 53 -j RETURN
+iptables -t mangle -A '$RELAY_MARK_CHAIN' -p tcp --dport 53 -j RETURN
+iptables -t mangle -A '$RELAY_MARK_CHAIN' -p tcp --dport 853 -j RETURN
 iptables -t mangle -A '$RELAY_MARK_CHAIN' -j MARK --set-mark '$RELAY_MARK'
 "
 }
