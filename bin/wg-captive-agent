@@ -10,6 +10,8 @@ fi
 
 WG_INTERFACE="${WG_INTERFACE:-wg0}"
 IPSET_NAME="${IPSET_NAME:-wg_expired}"
+BLOCKED_DEST_IPSET_NAME="${BLOCKED_DEST_IPSET_NAME:-wg_blocked_dst}"
+BLOCKED_DEST_IPS="${BLOCKED_DEST_IPS:-}"
 PORTAL_IP="${PORTAL_IP:-}"
 PORTAL_URL="${PORTAL_URL:-}"
 CAPTIVE_REDIRECT_PORT="${CAPTIVE_REDIRECT_PORT:-51823}"
@@ -56,12 +58,29 @@ db_config_value() {
   db_scalar "SELECT value FROM node_config WHERE key='$key';" || true
 }
 
+db_config_text() {
+  local key
+  key="$(sqlite_escape "$1")"
+  [[ -f "$STATE_DB" ]] || return 1
+  command -v sqlite3 >/dev/null 2>&1 || return 1
+  sqlite3 -noheader "$STATE_DB" "SELECT value FROM node_config WHERE key='$key';" 2>/dev/null || true
+}
+
+db_config_exists() {
+  local key
+  key="$(sqlite_escape "$1")"
+  [[ "$(db_scalar "SELECT COUNT(*) FROM node_config WHERE key='$key';" || echo 0)" != "0" ]]
+}
+
 db_load_runtime_config() {
   local value
   value="$(db_config_value PORTAL_IP)"; [[ -n "$value" ]] && PORTAL_IP="$value"
   value="$(db_config_value PORTAL_URL)"; [[ -n "$value" ]] && PORTAL_URL="$value"
   value="$(db_config_value BLOCK_DNS)"; [[ -n "$value" ]] && BLOCK_DNS="$value"
   value="$(db_config_value BLOCK_DOT)"; [[ -n "$value" ]] && BLOCK_DOT="$value"
+  if db_config_exists BLOCKED_DEST_IPS; then
+    BLOCKED_DEST_IPS="$(db_config_text BLOCKED_DEST_IPS)"
+  fi
   value="$(db_scalar "SELECT exit_if FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_EXIT_IF="$value"
   value="$(db_scalar "SELECT client_subnet FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_CLIENT_SUBNET="$value"
   value="$(db_scalar "SELECT route_table FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_ROUTE_TABLE="$value"
@@ -188,11 +207,13 @@ ensure_chain() {
 
 ensure_firewall() {
   ips create "$IPSET_NAME" hash:ip -exist
+  ips create "$BLOCKED_DEST_IPSET_NAME" hash:net -exist
 
   ensure_chain nat "$NAT_CHAIN"
   ensure_chain filter "$FILTER_CHAIN"
   ensure_chain mangle "$MARK_CHAIN"
 
+  iptables_insert_once filter FORWARD -i "$WG_INTERFACE" -m set --match-set "$BLOCKED_DEST_IPSET_NAME" dst -j REJECT
   iptables_append_once nat PREROUTING -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN"
   iptables_append_once nat PREROUTING -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN"
   iptables_insert_once mangle PREROUTING -m set --match-set "$IPSET_NAME" src -j "$MARK_CHAIN"
@@ -269,10 +290,12 @@ iptables -t mangle -A '$MARK_CHAIN' -j MARK --set-mark '$CAPTIVE_MARK'
 relay_ensure_route_mark() {
   relay_exec "
 ipset create '$IPSET_NAME' hash:ip -exist
+ipset create '$BLOCKED_DEST_IPSET_NAME' hash:net -exist
 iptables -t mangle -N '$RELAY_MARK_CHAIN' 2>/dev/null || true
 iptables -t mangle -C PREROUTING -s '$RELAY_CLIENT_SUBNET' -j '$RELAY_MARK_CHAIN' 2>/dev/null || iptables -t mangle -A PREROUTING -s '$RELAY_CLIENT_SUBNET' -j '$RELAY_MARK_CHAIN'
 iptables -t mangle -F '$RELAY_MARK_CHAIN'
 iptables -t mangle -A '$RELAY_MARK_CHAIN' -m set --match-set '$IPSET_NAME' src -j RETURN
+iptables -t mangle -A '$RELAY_MARK_CHAIN' -m set --match-set '$BLOCKED_DEST_IPSET_NAME' dst -j RETURN
 iptables -t mangle -A '$RELAY_MARK_CHAIN' -p udp --dport 53 -j RETURN
 iptables -t mangle -A '$RELAY_MARK_CHAIN' -p tcp --dport 53 -j RETURN
 iptables -t mangle -A '$RELAY_MARK_CHAIN' -p tcp --dport 853 -j RETURN
@@ -316,6 +339,8 @@ relay_route_on() {
   db_write_relay_conf
   [[ -f "$RELAY_EXIT_CONF" ]] || die "import relay exit config before enabling route"
   relay_ensure_forward
+  resolve_netns
+  sync_blocked_dest_ipset
   relay_ensure_captive_mark
   relay_ensure_route_mark
   relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1" || relay_tunnel_up
@@ -470,8 +495,36 @@ sync_ipset() {
   ips destroy "$tmp_set" >/dev/null 2>&1 || true
 }
 
+fetch_blocked_dest_ips() {
+  printf "%s\n" "$BLOCKED_DEST_IPS" | tr ',;' '\n' | while IFS= read -r line; do
+    line="${line%%#*}"
+    for item in $line; do
+      [[ -n "$item" ]] && printf "%s\n" "$item"
+    done
+  done
+}
+
+sync_blocked_dest_ipset() {
+  local tmp_set="${BLOCKED_DEST_IPSET_NAME}_next"
+
+  ips create "$BLOCKED_DEST_IPSET_NAME" hash:net -exist
+  ips create "$tmp_set" hash:net -exist
+  ips flush "$tmp_set"
+
+  while IFS= read -r ip; do
+    if [[ -n "$ip" ]] && ! ips add "$tmp_set" "$ip" -exist 2>/dev/null; then
+      echo "wg-captive-agent: skip invalid blocked destination: $ip" >&2
+    fi
+  done < <(fetch_blocked_dest_ips)
+
+  ips swap "$tmp_set" "$BLOCKED_DEST_IPSET_NAME"
+  ips destroy "$tmp_set" >/dev/null 2>&1 || true
+}
+
 cleanup() {
   resolve_netns
+  ipt -t filter -D FORWARD -i "$WG_INTERFACE" -m set --match-set "$BLOCKED_DEST_IPSET_NAME" dst -j REJECT >/dev/null 2>&1 || true
+  ipt -t filter -D FORWARD -m set --match-set "$BLOCKED_DEST_IPSET_NAME" dst -j REJECT >/dev/null 2>&1 || true
   ipt -t nat -D PREROUTING -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN" >/dev/null 2>&1 || true
   ipt -t nat -D PREROUTING -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN" >/dev/null 2>&1 || true
   ipt -t mangle -D PREROUTING -m set --match-set "$IPSET_NAME" src -j "$MARK_CHAIN" >/dev/null 2>&1 || true
@@ -494,6 +547,7 @@ cleanup() {
   fi
 
   ips destroy "$IPSET_NAME" >/dev/null 2>&1 || true
+  ips destroy "$BLOCKED_DEST_IPSET_NAME" >/dev/null 2>&1 || true
 }
 
 status() {
@@ -501,6 +555,7 @@ status() {
   echo "config: $CONFIG_FILE"
   echo "interface: $WG_INTERFACE"
   echo "ipset: $IPSET_NAME"
+  echo "blocked_dest_ipset: $BLOCKED_DEST_IPSET_NAME"
   echo "portal_url: ${PORTAL_URL:-}"
   echo "portal_ip: $PORTAL_IP"
   echo "redirect_port: $CAPTIVE_REDIRECT_PORT"
@@ -515,6 +570,10 @@ status() {
   fi
   echo
   ips list "$IPSET_NAME" 2>/dev/null || true
+  echo
+  ips list "$BLOCKED_DEST_IPSET_NAME" 2>/dev/null || true
+  echo
+  ipt -S FORWARD 2>/dev/null | grep "$BLOCKED_DEST_IPSET_NAME" || true
   echo
   ipt -t mangle -S PREROUTING 2>/dev/null | grep "$MARK_CHAIN" || true
   ipt -t mangle -S "$MARK_CHAIN" 2>/dev/null || true
@@ -534,6 +593,7 @@ sync_once() {
   ensure_tools
   ensure_firewall
   sync_ipset
+  sync_blocked_dest_ipset
 }
 
 run_loop() {

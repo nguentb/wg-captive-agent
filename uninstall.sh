@@ -7,6 +7,7 @@ APP_LIB_DIR="${APP_LIB_DIR:-/usr/local/lib/wg-captive-agent}"
 
 WG_INTERFACE="wg0"
 IPSET_NAME="wg_expired"
+BLOCKED_DEST_IPSET_NAME="wg_blocked_dst"
 EXPIRED_FILE="/etc/wg-captive-expired.txt"
 STATE_DB="/etc/wg-captive-agent.db"
 BACKUP_DIR="/var/backups/wg-captive"
@@ -73,6 +74,8 @@ remove_captive_rules() {
   netns_run iptables -t nat -D PREROUTING -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j WG_CAPTIVE_NAT
   netns_run iptables -t nat -D PREROUTING -m set --match-set "$IPSET_NAME" src -j WG_CAPTIVE_NAT
   netns_run iptables -t mangle -D PREROUTING -m set --match-set "$IPSET_NAME" src -j WG_CAPTIVE_MARK
+  netns_run iptables -D FORWARD -i "$WG_INTERFACE" -m set --match-set "$BLOCKED_DEST_IPSET_NAME" dst -j REJECT
+  netns_run iptables -D FORWARD -m set --match-set "$BLOCKED_DEST_IPSET_NAME" dst -j REJECT
   netns_run iptables -D FORWARD -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j WG_CAPTIVE_FILTER
   netns_run iptables -D FORWARD -m set --match-set "$IPSET_NAME" src -j WG_CAPTIVE_FILTER
   netns_run iptables -t nat -F WG_CAPTIVE_NAT
@@ -82,6 +85,7 @@ remove_captive_rules() {
   netns_run iptables -F WG_CAPTIVE_FILTER
   netns_run iptables -X WG_CAPTIVE_FILTER
   netns_run ipset destroy "$IPSET_NAME"
+  netns_run ipset destroy "$BLOCKED_DEST_IPSET_NAME"
 }
 
 remove_relay_rules() {

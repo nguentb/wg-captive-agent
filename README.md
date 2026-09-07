@@ -10,6 +10,7 @@ Captive firewall agent cho cac WireGuard/wg-easy server, kem web admin de quan l
 - Redirect HTTP port 80 cua router bi khoa ve service `wg-captive-redirect` chay trong network namespace cua `wg-easy`, tao token 15 phut va tra `302` sang `PORTAL_URL?node=SERVER_NAME&token=...`.
 - Cho phep router bi khoa truy cap `PORTAL_IP` da duoc resolve tu `PORTAL_URL` khi bam Save Settings tren port 443.
 - Chan HTTPS toi noi khac, DNS-over-TLS `853`, DNS thuong `53` va traffic con lai.
+- Chan IP dich doc hai bang ipset `wg_blocked_dst`; them IP/CIDR trong Settings de chan WireGuard client ket noi toi IP do.
 - Tab Settings de cau hinh portal URL, relay client subnet, Telegram backup, auto backup theo gio.
 - Backup local `.tar.gz` gom `state-db`, `metadata` va `wg0.json`.
 - Gui backup len Telegram ngay sau khi tao neu da cau hinh bot token/chat ID.
@@ -158,6 +159,8 @@ File `/etc/wg-captive-agent.env`:
 ```bash
 WG_INTERFACE=wg0
 IPSET_NAME=wg_expired
+BLOCKED_DEST_IPSET_NAME=wg_blocked_dst
+BLOCKED_DEST_IPS=
 PORTAL_URL=https://portal.example.com
 # Optional fixed IP override if DNS cannot be used:
 # PORTAL_IP=203.0.113.10
@@ -217,6 +220,7 @@ Tab `Captive`:
 - Nut `Dong bo client` doc lai nguon WireGuard ngay lap tuc. Tai lai trang Captive cung tu dong doi chieu nguon voi SQLite.
 - Client khong con trong `wg0.json`/`wg0.conf` duoc danh dau `source_present=0`, nhung khong bi xoa tu dong. Tab `Da xoa` hien cac client nay va chi tai do moi co nut thung rac xoa ban ghi SQLite. Neu nguon WireGuard dang loi/khong doc duoc, backend bo qua lan doi chieu va khong cho xoa.
 - Danh sach client trong admin giu dung thu tu trong `wg0.json`/`wg0.conf`; IP nho hon nhung nam cuoi file se van nam cuoi danh sach.
+- `Blocked destination IPs` trong Settings chap nhan moi dong mot IP/CIDR hoac ngan cach bang dau phay, vi du `203.0.113.10` hoac `198.51.100.0/24`. Rule chi ap dung cho traffic forward di vao tu `WG_INTERFACE`, khong doi trang thai user va khong anh huong route khac cua VPS. Khi relay dang bat, traffic toi IP nay duoc bo qua truoc buoc mark relay roi bi reject, nen khong duoc chuyen tiep qua exit. Cac dong sai dinh dang se bi bo qua khi sync firewall.
 
 Tab `Relay`:
 
