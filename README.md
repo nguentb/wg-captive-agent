@@ -15,7 +15,7 @@ Captive firewall agent cho cac WireGuard/wg-easy server, kem web admin de quan l
 - Backup local `.tar.gz` gom `state-db`, `metadata` va `wg0.json`.
 - Gui backup len Telegram ngay sau khi tao neu da cau hinh bot token/chat ID.
 - Restore tu file backup upload len web admin.
-- Tab Relay de import WireGuard `.conf` cua exit server, tao tunnel `wg-exit` trong container `wg-easy`, va route traffic client qua exit node.
+- Tab Relay quan ly hai tunnel: WireGuard UDP (`.conf`, `wg-exit`) va OpenVPN TCP (`.ovpn`, `tun-exit`), chuyen thu cong khi UDP loi.
 
 ## Mo hinh
 
@@ -53,7 +53,7 @@ curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg 
 sudo chmod 0644 /etc/apt/keyrings/nodesource.gpg
 echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
 sudo apt update
-sudo apt install -y iptables ipset tar nodejs util-linux wireguard-tools
+sudo apt install -y iptables ipset tar nodejs util-linux wireguard-tools openvpn
 node -v
 node -p 'require("node:net").getDefaultAutoSelectFamily()'
 ```
@@ -224,9 +224,16 @@ Tab `Captive`:
 
 Tab `Relay`:
 
-- Import file WireGuard client config `.conf` cua exit server.
+- Hai muc `WireGuard UDP` va `OpenVPN TCP` luu config rieng. Chon muc de xem/import config; nut `Use this tunnel` chon giao thuc se chay.
+- Chi mot tunnel duoc chon de relay. Tat switch Relay (hoac tat Route va Tunnel), chon muc con lai, bam `Use this tunnel`, roi bat Relay. Khong co tu dong failover.
+- WireGuard import file `.conf` cua exit server.
 - File import duoc tu dong them/thay `Table = off` trong `[Interface]` de tranh wg-quick doi default route cua container.
-- `Start tunnel`/`Stop tunnel`/`Restart tunnel` quan ly interface `wg-exit` trong container `wg-easy`.
+- OpenVPN import file `.ovpn` TCP, gom inline `<ca>`, `<cert>`, `<key>` va neu co `<tls-crypt>`/`<tls-auth>`. Khong chap nhan profile UDP, script, plugin, file certificate ben ngoai hoac password tuong tac.
+- OpenVPN 2.6+ chay tren host bang service `wg-captive-openvpn`, vao network namespace cua wg-easy qua `nsenter`, tao `tun-exit`. Khong can cai OpenVPN trong container.
+- `route-nopull`, `route-noexec` giu routing va DNS do captive agent quan ly. Endpoint OpenVPN duoc resolve tren host truoc khi vao namespace.
+- Tunnel/Restart/Route quan ly giao thuc dang chon. Dung tunnel se tat route truoc. Khong thay config dang chay; config du phong co the import trong khi tunnel con lai dang chay.
+- Nut Refresh tai lai status thu cong. Config cua ca hai tunnel va giao thuc dang chon nam trong SQLite, duoc backup/restore cung `state-db`.
+- Huong dan cai exit TCP va tao `.ovpn`: [OpenVPN TCP relay](docs/openvpn-relay.md).
 - `Enable route`/`Disable route` tao mangle chain `WG_RELAY_MARK`: client trong `RELAY_CLIENT_SUBNET` se duoc mark de di qua table relay, nhung IP dang nam trong ipset `wg_expired` se bi bo qua truoc khi mark.
 - DNS cua client khong di qua exit: `udp/53`, `tcp/53` va `tcp/853` duoc bo qua trong chain relay mark, nen resolve DNS van xu ly tai node relay/duong ra mac dinh cua node.
 - Vi relay chi route traffic da duoc `WG_RELAY_MARK`, user bi `disabled`/`expired` van giu co che captive popup/portal; user active moi di qua exit node.
@@ -246,7 +253,7 @@ Tu phien ban SQLite, du lieu chinh nam trong `STATE_DB`:
 
 - `client_state`: IP, ten client lay tu wg-easy `wg0.json`, public key, `disabled`, `expires_at` va `expired_at`.
 - `node_config`: cac setting chung cua node nhu portal URL, Telegram, DNS block, server IP.
-- `relay_config`: trang thai relay, subnet route, interface exit va noi dung WireGuard .conf da import.
+- `relay_config`: trang thai relay, subnet route, giao thuc dang chon, config WireGuard va OpenVPN da import. Update tu ban cu tu dong them cot va mac dinh giu WireGuard.
 - `api_tokens`: cac token API cua node, dung cho central server/tool ben ngoai goi API.
 - `captive_redirect_tokens`: token random tam thoi cho portal tra cuu user khi node redirect captive, mac dinh het han sau 15 phut.
 
@@ -569,6 +576,10 @@ Lenh relay:
 
 ```bash
 sudo wg-captive-agent relay-status
+sudo wg-captive-agent relay-disable
+sudo wg-captive-agent relay-select openvpn
+sudo wg-captive-agent relay-enable
+# Doi ve UDP: relay-disable, relay-select wireguard, relay-enable.
 sudo wg-captive-agent relay-tunnel-up
 sudo wg-captive-agent relay-tunnel-down
 sudo wg-captive-agent relay-restart

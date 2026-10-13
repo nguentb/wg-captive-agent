@@ -1,0 +1,15 @@
+[Unit]
+Description=Captive relay OpenVPN TCP tunnel
+After=network-online.target docker.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/wg-captive-openvpn
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+KillMode=control-group
+RuntimeDirectory=wg-captive-openvpn
+RuntimeDirectoryMode=0700

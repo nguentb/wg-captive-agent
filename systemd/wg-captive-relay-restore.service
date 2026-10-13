@@ -1,5 +1,5 @@
 [Unit]
-Description=Restore WireGuard captive relay route
+Description=Restore captive relay tunnel and route
 After=network-online.target docker.service wg-captive-agent.service
 Wants=network-online.target docker.service
 

@@ -36,7 +36,7 @@ if command -v apt-get >/dev/null 2>&1; then
   chmod 0644 /etc/apt/keyrings/nodesource.gpg
   echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
   apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y iptables ipset tar nodejs util-linux wireguard-tools
+  DEBIAN_FRONTEND=noninteractive apt-get install -y iptables ipset tar nodejs util-linux wireguard-tools openvpn
 else
   log "apt-get not found; assuming iptables, ipset, curl, tar, Node.js 24 LTS and nsenter are already installed"
 fi

@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+test_dir="$(mktemp -d)"
+trap 'rm -rf "$test_dir"' EXIT
+export CONFIG_FILE="$test_dir/absent.env" STATE_DB="$test_dir/absent.db"
+source <(sed '$d' "$repo/bin/wg-captive-agent")
+RELAY_ROUTE_FLAG="$test_dir/enabled"
+RELAY_EXIT_CONF="$test_dir/exit.conf"
+RELAY_PROTOCOL=wireguard
+RELAY_EXIT_IF=wg-exit
+RELAY_WG_EXIT_IF=wg-exit
+printf 'test\n' > "$RELAY_EXIT_CONF"
+log="$test_dir/commands"
+touch "$log"
+link_exists=1
+tcp_ready=1
+service_active=0
+relay_exec() {
+  printf '%s\n' "$1" >> "$log"
+  if [[ "$1" == *'ip link show'* ]]; then [[ "$link_exists" == 1 ]]; return; fi
+  if [[ "$1" == *'ip -4 addr show'* ]]; then [[ "$tcp_ready" == 1 ]]; return; fi
+  if [[ "$1" == *'ip rule show'* ]]; then return 1; fi
+  return 0
+}
+systemctl() {
+  printf 'systemctl %s\n' "$*" >> "$log"
+  if [[ "$1" == is-active ]]; then [[ "$service_active" == 1 ]]; return; fi
+  return 0
+}
+openvpn() { :; }
+sleep() { :; }
+relay_ensure_forward() { :; }
+resolve_netns() { :; }
+sync_blocked_dest_ipset() { :; }
+db_write_relay_conf() { :; }
+db_exec() { :; }
+
+relay_route_on >/dev/null
+grep -qF "ip route add default dev 'wg-exit'" "$log"
+grep -qF -- "--match-set 'wg_expired' src -j RETURN" "$log"
+grep -qF -- "--match-set 'wg_blocked_dst' dst -j RETURN" "$log"
+grep -qF -- "-p udp --dport 53 -j RETURN" "$log" || exit 1
+relay_route_off >/dev/null
+[[ ! -f "$RELAY_ROUTE_FLAG" ]]
+RELAY_PROTOCOL=openvpn
+RELAY_EXIT_IF=tun-exit
+relay_tunnel_up >/dev/null
+grep -qF 'systemctl restart wg-captive-openvpn.service' "$log"
+relay_route_on >/dev/null
+grep -qF "ip route add default dev 'tun-exit'" "$log"
+grep -qF -- "-o 'tun-exit' -j MASQUERADE" "$log" || exit 1
+if (relay_select wireguard) 2>/dev/null; then echo 'selection allowed with active route' >&2; exit 1; fi
+relay_route_off >/dev/null
+if (relay_select wireguard) 2>/dev/null; then echo 'selection allowed with active tunnel' >&2; exit 1; fi
+relay_tunnel_down >/dev/null
+tcp_ready=0
+if (relay_tunnel_up) 2>/dev/null; then echo 'TCP startup should fail' >&2; exit 1; fi
+grep -qF 'systemctl stop wg-captive-openvpn.service' "$log"
+relay_route_on() { printf 'route reapplied\n' >> "$log"; }
+tcp_ready=1
+rm -f "$RELAY_ROUTE_FLAG"
+relay_reapply
+if grep -qF 'route reapplied' "$log"; then echo 'reconnect undid manual stop' >&2; exit 1; fi
+touch "$RELAY_ROUTE_FLAG"
+relay_reapply
+grep -qF 'route reapplied' "$log"
+echo 'Relay shell: shared policy, UDP/TCP route, switch guards and TCP startup failure passed'

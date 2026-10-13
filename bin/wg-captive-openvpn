@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_FILE="${CONFIG_FILE:-/etc/wg-captive-agent.env}"
+[[ ! -f "$CONFIG_FILE" ]] || source "$CONFIG_FILE"
+STATE_DB="${STATE_DB:-/etc/wg-captive-agent.db}"
+WG_EASY_CONTAINER="${WG_EASY_CONTAINER:-}"
+RELAY_ROUTE_FLAG="${RELAY_ROUTE_FLAG:-/etc/wg-captive-relay.enabled}"
+[[ "$(sqlite3 -noheader "$STATE_DB" 'SELECT protocol FROM relay_config WHERE id=1;')" == openvpn ]] || exit 1
+conf="$(sqlite3 -noheader "$STATE_DB" 'SELECT openvpn_conf_path FROM relay_config WHERE id=1;')"
+[[ -s "$conf" ]] || { echo "OpenVPN config missing" >&2; exit 1; }
+
+# Resolve on the host: its systemd-resolved stub is not reachable in Docker's netns.
+read -r directive endpoint port transport < <(grep '^remote ' "$conf")
+family=ahosts
+[[ "$transport" != tcp4-client ]] || family=ahostsv4
+[[ "$transport" != tcp6-client ]] || family=ahostsv6
+endpoint_ip="$(getent "$family" "$endpoint" | awk 'NR==1 {print $1}')"
+[[ -n "$endpoint_ip" ]] || { echo "Cannot resolve OpenVPN endpoint: $endpoint" >&2; exit 1; }
+install -d -m 0700 /run/wg-captive-openvpn
+umask 077
+awk -v endpoint="$endpoint_ip" '$1=="remote" {$2=endpoint} {print}' "$conf" > /run/wg-captive-openvpn/client.ovpn
+
+target_pid=""
+prefix=()
+if [[ -n "$WG_EASY_CONTAINER" && "$WG_EASY_CONTAINER" != host ]]; then
+  target_pid="$(docker inspect -f '{{.State.Pid}}' "$WG_EASY_CONTAINER")"
+  [[ "$target_pid" =~ ^[1-9][0-9]*$ ]] || exit 1
+  prefix=(nsenter -t "$target_pid" -n)
+fi
+
+child_pid=""
+stop_child() {
+  if [[ -n "$child_pid" ]]; then
+    kill "$child_pid" 2>/dev/null || true
+    wait "$child_pid" 2>/dev/null || true
+  fi
+}
+trap stop_child EXIT
+trap 'exit 0' TERM INT
+
+"${prefix[@]}" openvpn --config /run/wg-captive-openvpn/client.ovpn \
+  --dev tun-exit --dev-type tun --disable-dco --route-nopull --route-noexec \
+  --script-security 1 --persist-key --persist-tun --auth-nocache --verb 3 &
+child_pid="$!"
+route_restored=0
+while kill -0 "$child_pid" 2>/dev/null; do
+  if [[ -n "$target_pid" ]]; then
+    current_pid="$(docker inspect -f '{{.State.Pid}}' "$WG_EASY_CONTAINER" 2>/dev/null || true)"
+    [[ "$current_pid" == "$target_pid" ]] || exit 1
+  fi
+  if [[ "$route_restored" == 0 ]] && "${prefix[@]}" ip -4 addr show dev tun-exit 2>/dev/null | grep -q 'inet '; then
+    if [[ -f "$RELAY_ROUTE_FLAG" ]]; then
+      /usr/local/sbin/wg-captive-agent relay-reapply || exit 1
+    fi
+    route_restored=1
+  fi
+  sleep 5
+done
+exit 1

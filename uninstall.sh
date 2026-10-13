@@ -96,12 +96,14 @@ remove_relay_rules() {
   fi
 
   relay_shell "wg-quick down '$RELAY_EXIT_IF' 2>/dev/null || true"
+  run systemctl stop wg-captive-openvpn.service
   relay_shell "while ip rule del priority '$CAPTIVE_MARK_PRIORITY' fwmark '$CAPTIVE_MARK' table main 2>/dev/null; do :; done"
   relay_shell "while ip rule del priority '$RELAY_RULE_PRIORITY' fwmark '$RELAY_MARK' table '$RELAY_ROUTE_TABLE' 2>/dev/null; do :; done"
   relay_shell "while ip rule del priority '$RELAY_RULE_PRIORITY' from '$RELAY_CLIENT_SUBNET' table '$RELAY_ROUTE_TABLE' 2>/dev/null; do :; done"
   relay_shell "while ip rule del from '$RELAY_CLIENT_SUBNET' table '$RELAY_ROUTE_TABLE' 2>/dev/null; do :; done"
   relay_shell "ip route flush table '$RELAY_ROUTE_TABLE' 2>/dev/null || true"
   relay_shell "while iptables -t nat -D POSTROUTING -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j MASQUERADE 2>/dev/null; do :; done"
+  relay_shell "while iptables -t nat -D POSTROUTING -s '$RELAY_CLIENT_SUBNET' -o tun-exit -j MASQUERADE 2>/dev/null; do :; done"
   relay_shell "while iptables -t mangle -D PREROUTING -s '$RELAY_CLIENT_SUBNET' -j WG_RELAY_MARK 2>/dev/null; do :; done"
   relay_shell "iptables -t mangle -F WG_RELAY_MARK 2>/dev/null || true"
   relay_shell "iptables -t mangle -X WG_RELAY_MARK 2>/dev/null || true"
@@ -118,6 +120,7 @@ stop_services() {
     run systemctl disable --now wg-captive-admin.service
     run systemctl disable --now wg-captive-redirect.service
     run systemctl disable --now wg-captive-relay-restore.service
+    run systemctl stop wg-captive-openvpn.service
   fi
 }
 
@@ -127,8 +130,10 @@ remove_files() {
   rm -f /etc/systemd/system/wg-captive-admin.service
   rm -f /etc/systemd/system/wg-captive-redirect.service
   rm -f /etc/systemd/system/wg-captive-relay-restore.service
+  rm -f /etc/systemd/system/wg-captive-openvpn.service
   rm -f "$AGENT_BIN"
   rm -f /usr/local/sbin/wg-captive-redirect
+  rm -f /usr/local/sbin/wg-captive-openvpn
   rm -f /usr/local/bin/wg-captive-agent
   rm -f /usr/local/bin/wg-captive-admin
   rm -f /usr/local/bin/wg-captive-update
@@ -145,6 +150,7 @@ remove_files() {
   rm -f "$STATE_DB"
   rm -rf /var/lib/wg-captive-agent
   rm -f "$RELAY_EXIT_CONF"
+  rm -f "${RELAY_OPENVPN_CONF:-/etc/wg-captive-relay-exit.ovpn}"
   rm -f "$RELAY_ROUTE_FLAG"
   rm -f /etc/sysctl.d/99-wg-captive-relay.conf
   rm -f "$SSL_CONFIG_FILE"
