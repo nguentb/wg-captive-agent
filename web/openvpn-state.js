@@ -12,22 +12,34 @@ function getState(socketPath, connect = net.createConnection) {
   return new Promise((resolve) => {
     let buffer = "";
     let finished = false;
+    let closeTimer;
     const socket = connect(socketPath);
     const timer = setTimeout(() => finish(), 700);
-    function finish() {
+    function cleanup() {
+      clearTimeout(closeTimer);
+      socket.destroy();
+    }
+    function finish(graceful = false) {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
-      socket.destroy();
+      if (graceful) {
+        // Let OpenVPN close its management session before closing our socket.
+        closeTimer = setTimeout(cleanup, 300);
+        socket.write("quit\n");
+      } else cleanup();
       resolve(parseState(buffer));
     }
     socket.on("connect", () => socket.write("state\n"));
     socket.on("data", (chunk) => {
       buffer += chunk.toString();
-      if (/(?:^|\n)END\r?(?:\n|$)/.test(buffer) || buffer.length > 16000) finish();
+      if (finished) return;
+      if (/(?:^|\n)END\r?(?:\n|$)/.test(buffer)) finish(true);
+      else if (buffer.length > 16000) finish();
     });
-    socket.on("error", finish);
-    socket.on("end", finish);
+    socket.on("error", () => { finish(); cleanup(); });
+    socket.on("end", () => { finish(); cleanup(); });
+    socket.on("close", () => { finish(); clearTimeout(closeTimer); });
   });
 }
 

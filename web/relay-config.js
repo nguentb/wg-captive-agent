@@ -1,7 +1,7 @@
 "use strict";
 
 function relayProtocol(value = "wireguard") {
-  if (!["wireguard", "openvpn", "xray"].includes(value)) throw new Error("Invalid relay protocol");
+  if (!["wireguard", "openvpn"].includes(value)) throw new Error("Invalid relay protocol");
   return value;
 }
 

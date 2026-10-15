@@ -115,7 +115,7 @@ function adminFixture(directory) {
     console, Buffer, URL, URLSearchParams, setTimeout, clearTimeout, setInterval,
   };
   vm.createContext(context);
-  vm.runInContext(source + "\nthis.fixture = { initDb, loadConfig, dbRelayFull, relayStatus, importRelayConf, runRelayAction, queueRelayOperation, createBackup, restoreBackup, appPage, clientJs, startXrayOperation, redactXray, getXrayOperation: () => xrayOperation };", context);
+  vm.runInContext(source + "\nthis.fixture = { initDb, loadConfig, dbRelayFull, relayStatus, importRelayConf, runRelayAction, queueRelayOperation, createBackup, restoreBackup, appPage, clientJs };", context);
   return { api: context.fixture, commands, setStatus(value) { agentStatus = value; }, wgPath, tcpPath, dbPath };
 }
 

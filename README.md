@@ -625,9 +625,10 @@ Script khong go cac package he thong nhu `nodejs`, `iptables`, `ipset`, `curl`, 
 - Web admin can quyen doc `WG_EASY_JSON` hoac docker exec vao `WG_EASY_CONTAINER`, ghi `EXPIRED_FILE`, `BACKUP_DIR` va chay `wg-captive-agent sync`.
 - Auto pop-up khong the dam bao 100% tren moi OS/thiet bi, nhung day la co che dung nhat khi khong can thiep router/client.
 
-## Xray Relay
+## Transport Tam Dung
 
-Tab **Xray** ho tro import link VLESS/Trojan hoac outbound JSON, quan ly service,
-route, kiem tra IP exit va log. Chi mot transport duoc dinh tuyen tai mot thoi diem.
-Core la thanh phan tuy chon: sau khi update agent, chay `sudo apt-get install -y unzip`
-va `sudo wg-captive-xray-install`. Xem [huong dan Xray chi tiet](docs/xray-relay.md).
+Xray tam thoi da duoc loai bo; Relay chi con WireGuard UDP va OpenVPN TCP.
+Installer dung service va go route Xray cu truoc khi thay binary agent. Neu Xray
+dang duoc chon, relay duoc dua ve WireGuard o trang thai tat; khong tu bat tunnel.
+Profile cu trong SQLite va file JSON duoc giu lai, khong con duoc nap/chay. Backup
+cu van restore duoc, nhung transport khong con ho tro se duoc dua ve trang thai tat.

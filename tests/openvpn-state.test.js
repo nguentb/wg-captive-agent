@@ -14,12 +14,12 @@ test("only CONNECTED SUCCESS is ready; a retained TUN cannot fake a TLS connecti
 test("management reader handles chunked replies, socket errors and bounded timeout", async () => {
   let writes = "";
   const socket = new EventEmitter();
-  socket.write = (data) => { writes += data; socket.emit("data", ">INFO:OpenVPN Management Interface\n171,CONNE"); socket.emit("data", "CTED,SUCCESS\nEND\n"); };
-  socket.destroy = () => {};
+  socket.write = (data) => { writes += data; if (data === "quit\n") { socket.emit("end"); return; } socket.emit("data", ">INFO:OpenVPN Management Interface\n171,CONNE"); socket.emit("data", "CTED,SUCCESS\nEND\n"); };
+  socket.destroy = () => { assert.equal(writes, "state\nquit\n"); };
   const pending = getState("test.sock", () => socket);
   socket.emit("connect");
   assert.equal((await pending).connected, true);
-  assert.equal(writes, "state\n");
+  assert.equal(writes, "state\nquit\n");
   const errorSocket = new EventEmitter(); errorSocket.destroy = () => {};
   const failed = getState("missing.sock", () => errorSocket);
   errorSocket.emit("error", new Error("ENOENT"));

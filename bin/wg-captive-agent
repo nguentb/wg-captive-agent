@@ -33,7 +33,6 @@ RELAY_PROTOCOL="wireguard"
 RELAY_OPENVPN_CONF="${RELAY_OPENVPN_CONF:-/etc/wg-captive-relay-exit.ovpn}"
 OPENVPN_RUNTIME_DIR="${OPENVPN_RUNTIME_DIR:-/run/wg-captive-openvpn}"
 OPENVPN_STATE_HELPER="${OPENVPN_STATE_HELPER:-/usr/local/lib/wg-captive-agent/openvpn-state.js}"
-RELAY_XRAY_CONF="${RELAY_XRAY_CONF:-/etc/wg-captive-relay-exit.json}"
 RELAY_WG_EXIT_IF="$RELAY_EXIT_IF"
 RELAY_LOCK_FILE="${RELAY_LOCK_FILE:-/run/wg-captive-agent/relay.lock}"
 CAPTIVE_MARK="${CAPTIVE_MARK:-0x19}"
@@ -95,13 +94,9 @@ db_load_runtime_config() {
   RELAY_WG_EXIT_IF="$RELAY_EXIT_IF"
   value="$(db_scalar "SELECT protocol FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_PROTOCOL="$value"
   value="$(db_scalar "SELECT openvpn_conf_path FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_OPENVPN_CONF="$value"
-  value="$(db_scalar "SELECT xray_conf_path FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_XRAY_CONF="$value"
   if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
     RELAY_EXIT_IF="tun-exit"
     RELAY_EXIT_CONF="$RELAY_OPENVPN_CONF"
-  elif [[ "$RELAY_PROTOCOL" == "xray" ]]; then
-    RELAY_EXIT_IF="xray-exit"
-    RELAY_EXIT_CONF="$RELAY_XRAY_CONF"
   fi
 }
 
@@ -110,7 +105,6 @@ db_write_relay_conf() {
   command -v sqlite3 >/dev/null 2>&1 || return 0
   local content column=exit_conf
   [[ "$RELAY_PROTOCOL" == "openvpn" ]] && column=openvpn_conf
-  [[ "$RELAY_PROTOCOL" == "xray" ]] && column=xray_conf
   content="$(sqlite3 -noheader "$STATE_DB" "SELECT $column FROM relay_config WHERE id=1;" 2>/dev/null || true)"
   if [[ -n "$content" && ! -f "$RELAY_EXIT_CONF" ]]; then
     install -d -m 0755 "$(dirname "$RELAY_EXIT_CONF")"
@@ -124,9 +118,7 @@ db_set_relay_enabled() {
 }
 
 db_clear_relay_conf() {
-  if [[ "$RELAY_PROTOCOL" == "xray" ]]; then
-    db_exec "UPDATE relay_config SET enabled=0, xray_conf=NULL, xray_imported_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=1;"
-  elif [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
+  if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
     db_exec "UPDATE relay_config SET enabled=0, openvpn_conf=NULL, openvpn_imported_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=1;"
   else
     db_exec "UPDATE relay_config SET enabled=0, exit_conf=NULL, imported_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=1;"
@@ -142,7 +134,7 @@ NETNS_PID=""
 
 usage() {
   cat <<'EOF'
-Usage: wg-captive-agent [run|sync|cleanup|status|relay-enable|relay-disable|relay-delete-config|relay-on|relay-off|relay-status|relay-tunnel-up|relay-tunnel-down|relay-restart|relay-restore|relay-select wireguard|relay-select openvpn|relay-select xray]
+Usage: wg-captive-agent [run|sync|cleanup|status|relay-enable|relay-disable|relay-delete-config|relay-on|relay-off|relay-status|relay-tunnel-up|relay-tunnel-down|relay-restart|relay-restore|relay-select wireguard|relay-select openvpn]
 
 Commands:
   run      Sync expired peers in a loop and keep firewall rules installed.
@@ -336,32 +328,17 @@ iptables -t mangle -A '$RELAY_MARK_CHAIN' -j MARK --set-mark '$RELAY_MARK'
 }
 
 relay_tunnel_ready() {
-  if [[ "$RELAY_PROTOCOL" == xray ]]; then
-    systemctl is-active --quiet wg-captive-xray.service && relay_exec "ip link show xray-exit >/dev/null 2>&1"
-  elif [[ "$RELAY_PROTOCOL" == openvpn ]]; then
+  if [[ "$RELAY_PROTOCOL" == openvpn ]]; then
     systemctl is-active --quiet wg-captive-openvpn.service || return 1
-    node "$OPENVPN_STATE_HELPER" ready "$OPENVPN_RUNTIME_DIR/management.sock" || return 1
-    relay_exec "ip -4 addr show dev tun-exit 2>/dev/null | grep -q 'inet '"
+    relay_exec "ip -4 addr show dev tun-exit 2>/dev/null | grep -q 'inet '" || return 1
+    node "$OPENVPN_STATE_HELPER" ready "$OPENVPN_RUNTIME_DIR/management.sock"
   else
     relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1"
   fi
 }
 
 relay_tunnel_up() {
-  if [[ "$RELAY_PROTOCOL" == xray ]]; then
-    db_write_relay_conf
-    [[ -s "$RELAY_EXIT_CONF" ]] || die "import Xray config first"
-    [[ -x /usr/local/lib/wg-captive-agent/xray/xray ]] || die "install Xray first: sudo wg-captive-xray-install"
-    systemctl start wg-captive-xray.service
-    local attempt
-    for attempt in {1..8}; do
-      if relay_tunnel_ready; then echo "relay_tunnel: up (Xray TUN ready; test exit separately)"; return; fi
-      systemctl is-active --quiet wg-captive-xray.service || break
-      sleep 1
-    done
-    systemctl stop wg-captive-xray.service
-    die "Xray TUN did not start; check journalctl -u wg-captive-xray"
-  fi
+  [[ "$RELAY_PROTOCOL" == wireguard || "$RELAY_PROTOCOL" == openvpn ]] || die "selected transport is no longer supported; run the installer to migrate"
   if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
     db_write_relay_conf
     [[ -s "$RELAY_EXIT_CONF" ]] || die "import OpenVPN TCP config first"
@@ -381,11 +358,6 @@ relay_tunnel_up() {
 }
 
 relay_tunnel_down() {
-  if [[ "$RELAY_PROTOCOL" == xray ]]; then
-    systemctl stop wg-captive-xray.service
-    echo "relay_tunnel: down"
-    return
-  fi
   if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
     systemctl stop wg-captive-openvpn.service
     echo "relay_tunnel: down"
@@ -409,7 +381,6 @@ iptables -t mangle -X '$RELAY_MARK_CHAIN' 2>/dev/null || true
 while iptables -D FORWARD -j WG_RELAY 2>/dev/null; do :; done
 iptables -F WG_RELAY 2>/dev/null || true
 iptables -X WG_RELAY 2>/dev/null || true
-while ip6tables -D FORWARD -i '$WG_INTERFACE' -m comment --comment wg-captive-xray -j REJECT 2>/dev/null; do :; done
 " || true
   rm -f "$RELAY_ROUTE_FLAG"
   db_set_relay_enabled 0
@@ -430,12 +401,6 @@ relay_route_on() {
   fi
   relay_ensure_forward
   resolve_netns
-  # Refresh the same captive and malware guard before routing into userspace.
-  if [[ "$RELAY_PROTOCOL" == xray ]]; then
-    require_config
-    ensure_firewall
-    sync_ipset
-  fi
   sync_blocked_dest_ipset
   relay_ensure_captive_mark || return 1
   relay_ensure_route_mark || return 1
@@ -456,28 +421,11 @@ iptables -C FORWARD -j WG_RELAY 2>/dev/null || iptables -A FORWARD -j WG_RELAY
 iptables -A WG_RELAY -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j ACCEPT
 ip route add default dev '$RELAY_EXIT_IF' table '$RELAY_ROUTE_TABLE'
 ip rule add priority '$RELAY_RULE_PRIORITY' fwmark '$RELAY_MARK' table '$RELAY_ROUTE_TABLE'
-if [ '$RELAY_PROTOCOL' != xray ]; then
-  iptables -t nat -A POSTROUTING -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j MASQUERADE
-else
-  iptables -A WG_RELAY -i '$RELAY_EXIT_IF' -d '$RELAY_CLIENT_SUBNET' -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-fi
+iptables -t nat -A POSTROUTING -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j MASQUERADE
 "; then
     relay_route_off >/dev/null 2>&1 || true
     echo 'wg-captive-agent: failed to apply relay routing/firewall' >&2
     return 1
-  fi
-  if [[ "$RELAY_PROTOCOL" == xray ]]; then
-    # A disappearing TUN must not fall through to the normal Internet gateway.
-    # Current captive/block lists are IPv4-only: reject forwarded IPv6 instead of leaking it.
-    if ! relay_exec "
-ip route add blackhole default metric 32760 table '$RELAY_ROUTE_TABLE'
-sysctl -w net.ipv4.conf.xray-exit.rp_filter=2 >/dev/null
-iptables -t mangle -I '$RELAY_MARK_CHAIN' 1 -m set --match-set '$BLOCKED_DEST_IPSET_NAME' dst -j DROP
-ip6tables -C FORWARD -i '$WG_INTERFACE' -m comment --comment wg-captive-xray -j REJECT 2>/dev/null || ip6tables -I FORWARD -i '$WG_INTERFACE' -m comment --comment wg-captive-xray -j REJECT
-"; then
-      relay_route_off >/dev/null 2>&1 || true
-      return 1
-    fi
   fi
   touch "$RELAY_ROUTE_FLAG"
   db_set_relay_enabled 1
@@ -501,20 +449,20 @@ relay_restore() {
 
 relay_reapply() {
   # Re-check intent under relay.lock: a queued reconnect must not undo a manual stop.
-  [[ ( "$RELAY_PROTOCOL" == openvpn || "$RELAY_PROTOCOL" == xray ) && -f "$RELAY_ROUTE_FLAG" ]] || return 0
+  [[ "$RELAY_PROTOCOL" == openvpn && -f "$RELAY_ROUTE_FLAG" ]] || return 0
   relay_tunnel_ready || return 75
   relay_route_on no
 }
 
 relay_select() {
   local protocol="${1:-}"
-  [[ "$protocol" == "wireguard" || "$protocol" == "openvpn" || "$protocol" == xray ]] || die "protocol must be wireguard, openvpn or xray"
+  [[ "$protocol" == "wireguard" || "$protocol" == "openvpn" ]] || die "protocol must be wireguard or openvpn"
   [[ "$protocol" == "$RELAY_PROTOCOL" ]] && return 0
   [[ ! -f "$RELAY_ROUTE_FLAG" ]] || die "stop relay route and tunnel before switching protocol"
   if relay_exec "ip rule show | grep -Eq 'fwmark $RELAY_MARK lookup $RELAY_ROUTE_TABLE|from $RELAY_CLIENT_SUBNET lookup $RELAY_ROUTE_TABLE'"; then
     die "stop relay route before switching protocol"
   fi
-  if relay_exec "ip link show '$RELAY_WG_EXIT_IF' >/dev/null 2>&1 || ip link show tun-exit >/dev/null 2>&1 || ip link show xray-exit >/dev/null 2>&1" || systemctl is-active --quiet wg-captive-openvpn.service || systemctl is-active --quiet wg-captive-xray.service; then
+  if relay_exec "ip link show '$RELAY_WG_EXIT_IF' >/dev/null 2>&1 || ip link show tun-exit >/dev/null 2>&1" || systemctl is-active --quiet wg-captive-openvpn.service; then
     die "stop relay route and tunnel before switching protocol"
   fi
   [[ -f "$STATE_DB" ]] || die "SQLite database is required"
@@ -542,7 +490,6 @@ relay_delete_config() {
   if [[ "$RELAY_PROTOCOL" == "openvpn" ]] && systemctl is-active --quiet wg-captive-openvpn.service; then
     tunnel_on=1
   fi
-  if [[ "$RELAY_PROTOCOL" == xray ]] && systemctl is-active --quiet wg-captive-xray.service; then tunnel_on=1; fi
 
   if relay_exec "ip rule show | grep -Eq 'fwmark $RELAY_MARK lookup $RELAY_ROUTE_TABLE|from $RELAY_CLIENT_SUBNET lookup $RELAY_ROUTE_TABLE'"; then
     route_on=1
@@ -575,11 +522,11 @@ relay_status() {
   echo "relay_route_table: $RELAY_ROUTE_TABLE"
   if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
     echo "openvpn_service: $(systemctl is-active wg-captive-openvpn.service 2>/dev/null || true)"
-    node "$OPENVPN_STATE_HELPER" state "$OPENVPN_RUNTIME_DIR/management.sock" || true
-  elif [[ "$RELAY_PROTOCOL" == xray ]]; then
-    echo "xray_service: $(systemctl is-active wg-captive-xray.service 2>/dev/null || true)"
-    echo "xray_ready_is_not_exit_health: yes"
-    /usr/local/lib/wg-captive-agent/xray/xray version 2>/dev/null | head -n 1 || true
+    if relay_exec "ip -4 addr show dev tun-exit 2>/dev/null | grep -q 'inet '"; then
+      node "$OPENVPN_STATE_HELPER" state "$OPENVPN_RUNTIME_DIR/management.sock" || true
+    else
+      echo "openvpn_connection: WAITING_FOR_TUN"
+    fi
   fi
   echo
   echo "=== Tunnel ==="

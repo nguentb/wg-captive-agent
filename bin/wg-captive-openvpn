@@ -68,9 +68,9 @@ while kill -0 "$child_pid" 2>/dev/null; do
     current_pid="$(docker inspect -f '{{.State.Pid}}' "$WG_EASY_CONTAINER" 2>/dev/null || true)"
     [[ "$current_pid" == "$target_pid" ]] || exit 1
   fi
-  if ! node "$STATE_HELPER" ready "$RUNTIME_DIR/management.sock"; then
+  if ! "${prefix[@]}" ip -4 addr show dev tun-exit 2>/dev/null | grep -q 'inet ' || ! node "$STATE_HELPER" ready "$RUNTIME_DIR/management.sock"; then
     route_restored=0
-  elif [[ "$route_restored" == 0 ]] && "${prefix[@]}" ip -4 addr show dev tun-exit 2>/dev/null | grep -q 'inet '; then
+  elif [[ "$route_restored" == 0 ]]; then
     if [[ -f "$RELAY_ROUTE_FLAG" ]]; then
       if "$AGENT_BIN" relay-reapply; then
         route_restored=1
