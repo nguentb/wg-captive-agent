@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$EUID" == 0 ]] || { echo 'Run with sudo' >&2; exit 1; }
+[[ "$(uname -s)" == Linux ]] || { echo 'Linux is required' >&2; exit 1; }
+for tool in curl unzip sha256sum node unshare flock; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo 'Install dependencies first: sudo apt-get install curl unzip ca-certificates' >&2
+    exit 1
+  fi
+done
+case "$(uname -m)" in
+  x86_64) asset=Xray-linux-64.zip ;;
+  aarch64|arm64) asset=Xray-linux-arm64-v8a.zip ;;
+  *) echo 'Supported architectures: x86_64 and arm64' >&2; exit 1 ;;
+esac
+dest=/usr/local/lib/wg-captive-agent/xray
+install -d -m 0755 "$dest"
+exec 8>"$dest/install.lock"
+flock -n 8 || { echo 'Another Xray installation is running' >&2; exit 1; }
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+version="${XRAY_VERSION:-}"
+if [[ -z "$version" ]]; then
+  curl --fail --silent --show-error --location --connect-timeout 10 --max-time 60 https://api.github.com/repos/XTLS/Xray-core/releases/latest -o "$tmp/release.json"
+  version="$(node -e 'const r=require(process.argv[1]);if(r.prerelease||r.draft)process.exit(1);process.stdout.write(r.tag_name)' "$tmp/release.json")"
+fi
+[[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid Xray release tag' >&2; exit 1; }
+base="https://github.com/XTLS/Xray-core/releases/download/$version/$asset"
+curl --fail --silent --show-error --location --connect-timeout 10 --max-time 180 "$base" -o "$tmp/core.zip"
+curl --fail --silent --show-error --location --connect-timeout 10 --max-time 60 "$base.dgst" -o "$tmp/core.dgst"
+actual="$(sha256sum "$tmp/core.zip" | awk '{print $1}')"
+grep -Eiq "(^|[^0-9a-f])$actual([^0-9a-f]|$)" "$tmp/core.dgst" || { echo 'Xray SHA-256 verification failed' >&2; exit 1; }
+unzip -q "$tmp/core.zip" xray -d "$tmp/core"
+chmod 0755 "$tmp/core/xray"
+# Some core versions create a TUN even during -test: isolate this feature check.
+printf '%s\n' '{"inbounds":[{"protocol":"tun","settings":{"name":"xray-exit"}}],"outbounds":[{"protocol":"blackhole"}]}' > "$tmp/check.json"
+unshare --net "$tmp/core/xray" run -test -config "$tmp/check.json"
+install -m 0755 "$tmp/core/xray" "$dest/xray.new"
+mv -f "$dest/xray.new" "$dest/xray"
+printf '%s\n' "$version" > "$dest/version"
+echo "Installed Xray $version (SHA-256 verified). Existing Xray installations were not modified."
+echo 'Import a profile in the Xray tab. Stop the old tunnel and route before selecting Xray.'

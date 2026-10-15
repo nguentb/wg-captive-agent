@@ -624,3 +624,10 @@ Script khong go cac package he thong nhu `nodejs`, `iptables`, `ipset`, `curl`, 
 - Router da cau hinh DoT van xu ly duoc bang cach chan TCP 853 khi het han.
 - Web admin can quyen doc `WG_EASY_JSON` hoac docker exec vao `WG_EASY_CONTAINER`, ghi `EXPIRED_FILE`, `BACKUP_DIR` va chay `wg-captive-agent sync`.
 - Auto pop-up khong the dam bao 100% tren moi OS/thiet bi, nhung day la co che dung nhat khi khong can thiep router/client.
+
+## Xray Relay
+
+Tab **Xray** ho tro import link VLESS/Trojan hoac outbound JSON, quan ly service,
+route, kiem tra IP exit va log. Chi mot transport duoc dinh tuyen tai mot thoi diem.
+Core la thanh phan tuy chon: sau khi update agent, chay `sudo apt-get install -y unzip`
+va `sudo wg-captive-xray-install`. Xem [huong dan Xray chi tiet](docs/xray-relay.md).

@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+CONFIG_FILE="${CONFIG_FILE:-/etc/wg-captive-agent.env}"
+[[ ! -f "$CONFIG_FILE" ]] || source "$CONFIG_FILE"
+STATE_DB="${STATE_DB:-/etc/wg-captive-agent.db}"
+WG_EASY_CONTAINER="${WG_EASY_CONTAINER:-}"
+AGENT_BIN="${AGENT_BIN:-/usr/local/sbin/wg-captive-agent}"
+RELAY_ROUTE_FLAG="${RELAY_ROUTE_FLAG:-/etc/wg-captive-relay.enabled}"
+XRAY_BIN="${XRAY_BIN:-/usr/local/lib/wg-captive-agent/xray/xray}"
+XRAY_HELPER="${XRAY_HELPER:-/usr/local/lib/wg-captive-agent/xray-config.js}"
+RUNTIME_DIR="${XRAY_RUNTIME_DIR:-/run/wg-captive-xray}"
+[[ "$(sqlite3 -noheader "$STATE_DB" 'SELECT protocol FROM relay_config WHERE id=1;')" == xray ]] || exit 1
+conf="$(sqlite3 -noheader "$STATE_DB" 'SELECT xray_conf_path FROM relay_config WHERE id=1;')"
+[[ -s "$conf" ]] || { echo 'Xray config missing' >&2; exit 1; }
+endpoint="$(node "$XRAY_HELPER" endpoint "$conf")"
+endpoint_ip="$(getent ahosts "$endpoint" | awk 'NR==1 {print $1}')"
+[[ -n "$endpoint_ip" ]] || { echo 'Cannot resolve Xray endpoint on host' >&2; exit 1; }
+install -d -m 0700 "$RUNTIME_DIR"
+umask 077
+node "$XRAY_HELPER" runtime "$conf" "$endpoint_ip" > "$RUNTIME_DIR/client.json"
+node "$XRAY_HELPER" validate "$conf" "$endpoint_ip" > "$RUNTIME_DIR/check.json"
+"$XRAY_BIN" run -test -config "$RUNTIME_DIR/check.json"
+target_pid=""
+prefix=()
+if [[ -n "$WG_EASY_CONTAINER" && "$WG_EASY_CONTAINER" != host ]]; then
+  target_pid="$(docker inspect -f '{{.State.Pid}}' "$WG_EASY_CONTAINER")"
+  [[ "$target_pid" =~ ^[1-9][0-9]*$ ]] || exit 1
+  prefix=(nsenter -t "$target_pid" -n)
+fi
+child_pid=""
+sleep_pid=""
+stop_child() {
+  if [[ -n "$sleep_pid" ]]; then kill "$sleep_pid" 2>/dev/null || true; wait "$sleep_pid" 2>/dev/null || true; fi
+  if [[ -n "$child_pid" ]]; then kill "$child_pid" 2>/dev/null || true; wait "$child_pid" 2>/dev/null || true; fi
+}
+trap stop_child EXIT
+trap 'exit 0' TERM INT
+"${prefix[@]}" "$XRAY_BIN" run -config "$RUNTIME_DIR/client.json" &
+child_pid="$!"
+route_restored=0
+while kill -0 "$child_pid" 2>/dev/null; do
+  if [[ -n "$target_pid" ]]; then
+    current_pid="$(docker inspect -f '{{.State.Pid}}' "$WG_EASY_CONTAINER" 2>/dev/null || true)"
+    [[ "$current_pid" == "$target_pid" ]] || exit 1
+  fi
+  if [[ "$route_restored" == 0 ]] && "${prefix[@]}" ip link show xray-exit >/dev/null 2>&1; then
+    if [[ ! -f "$RELAY_ROUTE_FLAG" ]] || "$AGENT_BIN" relay-reapply; then route_restored=1; fi
+  fi
+  sleep 3 &
+  sleep_pid="$!"
+  wait "$sleep_pid" || true
+  sleep_pid=""
+done
+exit 1
