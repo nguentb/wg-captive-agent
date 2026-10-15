@@ -892,7 +892,7 @@ function relayStatus(config) {
   const tunnelUp = /^tunnel:\s*UP/im.test(status);
   const routeEnabled = /^route:\s*ENABLED/im.test(status);
   const tunnelRunning = tunnelUp || /^(openvpn|xray)_service:\s*(active|activating)/im.test(status);
-  return { ...profiles[protocol], protocol, profiles, enabled: routeEnabled, route_enabled: routeEnabled, tunnel_up: tunnelUp, tunnel_running: tunnelRunning, status };
+  return { ...profiles[protocol], protocol, profiles, enabled: routeEnabled, route_enabled: routeEnabled, route_requested: /^route_requested:\s*yes/im.test(status), openvpn_state: status.match(/^openvpn_connection:\s*(\S+)/im)?.[1] || "", tunnel_up: tunnelUp, tunnel_running: tunnelRunning, status };
 }
 
 function runRelayAction(action, protocol) {
@@ -1077,7 +1077,7 @@ function relayPanel() {
 <div class="relay-profile-head"><div class="relay-profile-meta"><strong id="relayProfileTitle"></strong><span id="relayProfileState"></span></div><button type="button" id="relaySelectBtn" class="ghost relay-select-btn">Use this tunnel</button></div>
 <div class="backup-panel"><form id="relayImportForm" class="relay-import" enctype="multipart/form-data"><input type="file" id="relayConfFile" name="relayConf" accept=".conf,text/plain"><button type="submit" class="ghost" id="relayImportBtn">Import .conf</button><button type="button" id="relayDeleteConfigBtn" class="ghost danger">Delete config</button></form></div>
 <div class="relay-ops"><div class="relay-op-row"><div><strong>Tunnel</strong><span id="relayTunnelLabel"></span></div><div class="relay-op-actions"><button class="ghost relay-action" data-action="relay-restart">Restart</button><label class="switch relay-switch" title="Toggle tunnel"><input type="checkbox" id="RELAY_TUNNEL"><span class="slider"></span></label></div></div><div class="relay-op-row"><div><strong>Route</strong></div><label class="switch relay-switch" title="Toggle route"><input type="checkbox" id="RELAY_ROUTE"><span class="slider"></span></label></div></div>
-<div class="relay-status-grid"><div class="relay-card"><h2>Exit config</h2><div id="relayConfigCard" class="relay-kv"></div></div><div class="relay-card"><h2>Active tunnel status</h2><button type="button" id="relayRefreshBtn" class="ghost compact">Refresh</button><div id="relayHealthCard" class="relay-kv"></div></div></div></section>`;
+<div class="relay-status-grid"><div class="relay-card"><h2>Exit config</h2><div id="relayConfigCard" class="relay-kv"></div></div><div class="relay-card"><h2>Active tunnel status</h2><button type="button" id="relayRefreshBtn" class="ghost compact">Refresh</button><button type="button" id="relayLogsBtn" class="ghost compact">OpenVPN logs</button><div id="relayHealthCard" class="relay-kv"></div></div></div></section>`;
 }
 
 function baseAppPage() {
@@ -1142,17 +1142,18 @@ function renderRelay(){
   const relay=state.relay||{};const selected=relay.protocol||'wireguard';const running=relay.tunnel_running||relay.tunnel_up;if(!relayView)relayView=selected==='xray'?'wireguard':selected;
   const profile=relay.profiles?.[relayView]||{};const current=relayView===selected;const name=relayView==='openvpn'?'OpenVPN TCP':'WireGuard UDP';
   document.querySelectorAll('[data-relay-protocol]').forEach((btn)=>{const active=btn.dataset.relayProtocol===relayView;btn.classList.toggle('active',active);btn.setAttribute('aria-selected',String(active));btn.disabled=busy});
-  $('relayActiveLabel').textContent=(selected==='xray'?'Xray':selected==='openvpn'?'OpenVPN TCP':'WireGuard UDP')+' / '+(relayBusy?'Updating...':(relay.tunnel_up?(relay.route_enabled?'Routing enabled':'Tunnel ready'):(running?'Connecting / reconnecting':'Stopped')));
+  $('relayActiveLabel').textContent=(selected==='xray'?'Xray':selected==='openvpn'?'OpenVPN TCP':'WireGuard UDP')+' / '+(relayBusy?'Updating...':(relay.tunnel_up?(relay.route_enabled?'Routing enabled':'Tunnel ready'):(running?'Connecting / reconnecting'+(relay.openvpn_state?' ('+relay.openvpn_state+')':''):'Stopped')));
   $('relayProfileTitle').textContent=name;$('relayProfileState').textContent=(profile.imported?'Config imported':'No config')+' / '+(current?'Selected':'Standby');
   $('relaySelectBtn').disabled=busy||current||running||relay.route_enabled;$('relaySelectBtn').textContent=current?'Selected':'Use this tunnel';
   $('relayConfFile').accept=relayView==='openvpn'?'.ovpn,text/plain':'.conf,text/plain';$('relayImportBtn').textContent=relayView==='openvpn'?'Import .ovpn':'Import .conf';
   $('relayImportBtn').disabled=busy||(current&&(running||relay.route_enabled));$('relayDeleteConfigBtn').disabled=busy||!current||!profile.imported||running||relay.route_enabled;
   $('relayTunnelLabel').textContent=relayView==='openvpn'?'tun-exit / TCP':'wg-exit / UDP';
-  $('RELAY_MASTER').checked=selected!=='xray'&&!!relay.route_enabled;$('RELAY_MASTER').disabled=busy||selected==='xray'||(!relay.imported&&!relay.route_enabled);
-  $('RELAY_TUNNEL').checked=current&&!!running;$('RELAY_ROUTE').checked=current&&!!relay.route_enabled;
+  $('RELAY_MASTER').checked=selected!=='xray'&&!!(relay.route_enabled||relay.route_requested);$('RELAY_MASTER').disabled=busy||selected==='xray'||(!relay.imported&&!relay.route_enabled);
+  $('RELAY_TUNNEL').checked=current&&!!running;$('RELAY_ROUTE').checked=current&&!!(relay.route_enabled||relay.route_requested);
   for(const id of ['RELAY_TUNNEL','RELAY_ROUTE'])$(id).disabled=busy||!current||!profile.imported;
   document.querySelectorAll('.relay-action').forEach((btn)=>btn.disabled=busy||!current||!profile.imported);
   $('relayRefreshBtn').disabled=busy;renderRelayConfig(profile);renderRelayStatus(relay)
+  $('relayLogsBtn').hidden=relayView!=='openvpn';$('relayLogsBtn').disabled=busy;
 }
 async function relayRequest(action,protocol=state.relay?.protocol||'wireguard'){
   if(relayBusy||xrayBusy)return;relayBusy=true;renderRelay();
@@ -1183,6 +1184,8 @@ $('relayDeleteConfigBtn').addEventListener('click',async()=>{if(!confirm('Delete
 document.querySelectorAll('[data-relay-protocol]').forEach((btn)=>btn.addEventListener('click',()=>{relayView=btn.dataset.relayProtocol;$('relayConfFile').value='';renderRelay()}));
 $('relaySelectBtn').addEventListener('click',async()=>{try{await relayRequest('relay-select',relayView);toast('Tunnel selected')}catch{}});
 $('relayRefreshBtn').addEventListener('click',async()=>{try{const data=await api(API_BASE+'/relay');state.relay=data.relay;renderRelay()}catch(error){toast(error.message)}});
+$('relayLogsBtn').addEventListener('click',async()=>{try{const data=await api(API_BASE+'/relay/openvpn/logs');$('relayHealthCard').innerHTML='<pre class="relay-status-pre">'+escapeHtml(data.logs||'No logs')+'</pre>'}catch(error){toast(error.message)}});
+let relayConnectPoll=0;setInterval(async()=>{if(relayConnectPoll||relayBusy||xrayBusy||$('relayTab').classList.contains('hidden')||state.relay?.protocol!=='openvpn'||!state.relay?.tunnel_running||state.relay?.tunnel_up)return;relayConnectPoll=1;try{const data=await api(API_BASE+'/relay');state.relay=data.relay;renderRelay()}catch{}finally{relayConnectPoll=0}},2500);
 $('relayImportForm').addEventListener('submit',async(e)=>{e.preventDefault();if(relayBusy)return;const file=$('relayConfFile').files[0];if(!file){toast('Choose a config file');return}const form=new FormData();form.append('relayConf',file);relayBusy=true;renderRelay();try{const res=await fetch(API_ENDPOINTS.relayImport+'?protocol='+relayView,{method:'POST',body:form});const data=await res.json();if(!res.ok||data.ok===false)throw new Error(data.error||'Import failed');state.config=data.config;state.relay=data.relay;$('relayConfFile').value='';toast('Relay config imported')}catch(error){toast(error.message)}finally{relayBusy=false;renderRelay()}});
 document.querySelectorAll('.relay-action').forEach((btn)=>btn.addEventListener('click',async()=>{try{await relayRequest(btn.dataset.action);toast('Tunnel restarted')}catch{}}));
 $('clientSyncBtn').addEventListener('click',async()=>{const btn=$('clientSyncBtn');btn.disabled=true;try{const data=await api(API_ENDPOINTS.clientSync,{method:'POST',body:'{}'});state.clients=data.clients||state.clients;renderClients();const missing=data.result?.missing?.length||0;toast(missing?'Tim thay '+missing+' client da xoa khoi wg0':'Danh sach client da dong bo')}catch(error){toast(error.message)}finally{btn.disabled=false}});
@@ -1372,6 +1375,10 @@ async function handleApi(req, res) {
     return sendJson(res, 200, { ok: true, config: publicConfig(loadConfig()), result });
   }
 
+  if (req.method === "GET" && pathname === "/api/v1/relay/openvpn/logs") {
+    const { stdout: logs } = await execFilePromise("journalctl", ["-u", "wg-captive-openvpn", "-n", "60", "--no-pager", "-o", "cat"], { timeout: 3000 });
+    return sendJson(res, 200, { ok: true, logs: logs.slice(-16000) });
+  }
   if (req.method === "GET" && pathname === "/api/v1/xray") {
     let version = "";
     if (fs.existsSync(XRAY_BIN)) {

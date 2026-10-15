@@ -13,3 +13,4 @@ TimeoutStopSec=5
 KillMode=control-group
 RuntimeDirectory=wg-captive-openvpn
 RuntimeDirectoryMode=0700
+UMask=0077

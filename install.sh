@@ -10,6 +10,7 @@ node --check web/wg-captive-admin.js
 node --check web/relay-config.js
 node --check web/xray-config.js
 node --check web/xray-ui.js
+node --check web/openvpn-state.js
 for script in bin/wg-captive-agent bin/wg-captive-redirect bin/wg-captive-openvpn bin/wg-captive-xray scripts/wg-captive-xray-install; do
   bash -n "$script"
 done
@@ -52,6 +53,7 @@ install -m 0755 web/wg-captive-admin.js /usr/local/lib/wg-captive-agent/wg-capti
 install -m 0644 web/relay-config.js /usr/local/lib/wg-captive-agent/relay-config.js
 install -m 0644 web/xray-config.js /usr/local/lib/wg-captive-agent/xray-config.js
 install -m 0644 web/xray-ui.js /usr/local/lib/wg-captive-agent/xray-ui.js
+install -m 0644 web/openvpn-state.js /usr/local/lib/wg-captive-agent/openvpn-state.js
 
 if [[ ! -f /etc/wg-captive-agent.env ]]; then
   install -m 0600 examples/wg-captive-agent.env /etc/wg-captive-agent.env

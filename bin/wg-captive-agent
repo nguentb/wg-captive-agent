@@ -31,6 +31,8 @@ RELAY_EXIT_CONF="${RELAY_EXIT_CONF:-/etc/wg-captive-relay-exit.conf}"
 RELAY_ROUTE_FLAG="${RELAY_ROUTE_FLAG:-/etc/wg-captive-relay.enabled}"
 RELAY_PROTOCOL="wireguard"
 RELAY_OPENVPN_CONF="${RELAY_OPENVPN_CONF:-/etc/wg-captive-relay-exit.ovpn}"
+OPENVPN_RUNTIME_DIR="${OPENVPN_RUNTIME_DIR:-/run/wg-captive-openvpn}"
+OPENVPN_STATE_HELPER="${OPENVPN_STATE_HELPER:-/usr/local/lib/wg-captive-agent/openvpn-state.js}"
 RELAY_XRAY_CONF="${RELAY_XRAY_CONF:-/etc/wg-captive-relay-exit.json}"
 RELAY_WG_EXIT_IF="$RELAY_EXIT_IF"
 RELAY_LOCK_FILE="${RELAY_LOCK_FILE:-/run/wg-captive-agent/relay.lock}"
@@ -337,6 +339,8 @@ relay_tunnel_ready() {
   if [[ "$RELAY_PROTOCOL" == xray ]]; then
     systemctl is-active --quiet wg-captive-xray.service && relay_exec "ip link show xray-exit >/dev/null 2>&1"
   elif [[ "$RELAY_PROTOCOL" == openvpn ]]; then
+    systemctl is-active --quiet wg-captive-openvpn.service || return 1
+    node "$OPENVPN_STATE_HELPER" ready "$OPENVPN_RUNTIME_DIR/management.sock" || return 1
     relay_exec "ip -4 addr show dev tun-exit 2>/dev/null | grep -q 'inet '"
   else
     relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1"
@@ -367,18 +371,8 @@ relay_tunnel_up() {
       return
     fi
     systemctl start wg-captive-openvpn.service
-    local attempt
-    for attempt in {1..20}; do
-      if relay_tunnel_ready; then
-        echo "relay_tunnel: up"
-        return
-      fi
-      systemctl is-active --quiet wg-captive-openvpn.service || break
-      sleep 1
-    done
-    systemctl stop wg-captive-openvpn.service
-    relay_route_off >/dev/null 2>&1 || true
-    die "OpenVPN did not connect within 20 seconds; check journalctl -u wg-captive-openvpn"
+    echo "relay_tunnel: connecting (retries continue in background; check OpenVPN connection state)"
+    return
   fi
   relay_copy_conf
   relay_wg_exec "wg-quick down '$RELAY_EXIT_IF' 2>/dev/null || true"
@@ -426,6 +420,14 @@ relay_route_on() {
   local allow_start="${1:-yes}"
   db_write_relay_conf
   [[ -f "$RELAY_EXIT_CONF" ]] || die "import relay exit config before enabling route"
+  if [[ "$RELAY_PROTOCOL" == openvpn ]] && ! relay_tunnel_ready; then
+    [[ "$allow_start" == yes ]] || return 75
+    relay_tunnel_up
+    touch "$RELAY_ROUTE_FLAG"
+    db_set_relay_enabled 1
+    echo "relay_route: pending OpenVPN connection; cancel with relay-off"
+    return
+  fi
   relay_ensure_forward
   resolve_netns
   # Refresh the same captive and malware guard before routing into userspace.
@@ -573,6 +575,7 @@ relay_status() {
   echo "relay_route_table: $RELAY_ROUTE_TABLE"
   if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
     echo "openvpn_service: $(systemctl is-active wg-captive-openvpn.service 2>/dev/null || true)"
+    node "$OPENVPN_STATE_HELPER" state "$OPENVPN_RUNTIME_DIR/management.sock" || true
   elif [[ "$RELAY_PROTOCOL" == xray ]]; then
     echo "xray_service: $(systemctl is-active wg-captive-xray.service 2>/dev/null || true)"
     echo "xray_ready_is_not_exit_health: yes"
@@ -592,6 +595,7 @@ relay_status() {
   fi
   echo
   echo "=== Route ==="
+  echo "route_requested: $([[ -f "$RELAY_ROUTE_FLAG" ]] && echo yes || echo no)"
   if relay_exec "ip rule show | grep -Eq 'fwmark $RELAY_MARK lookup $RELAY_ROUTE_TABLE|from $RELAY_CLIENT_SUBNET lookup $RELAY_ROUTE_TABLE'"; then
     echo "route: ENABLED"
   else

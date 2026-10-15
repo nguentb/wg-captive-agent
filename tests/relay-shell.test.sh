@@ -23,16 +23,19 @@ relay_exec() {
   if [[ "$fail_mark" == 1 && "$1" == *'ipset create'* ]]; then return 127; fi
   if [[ "$fail_apply" == 1 && "$1" == *'ip route add default'* ]]; then return 1; fi
   if [[ "$1" == *'ip link show'* ]]; then [[ "$link_exists" == 1 ]]; return; fi
-  if [[ "$1" == *'ip -4 addr show'* ]]; then [[ "$tcp_ready" == 1 ]]; return; fi
+  if [[ "$1" == *'ip -4 addr show'* ]]; then [[ "$tcp_ready" == 1 && "$link_exists" == 1 ]]; return; fi
   if [[ "$1" == *'ip rule show'* ]]; then return 1; fi
   return 0
 }
 systemctl() {
   printf 'systemctl %s\n' "$*" >> "$log"
   if [[ "$1" == is-active ]]; then [[ "$service_active" == 1 ]]; return; fi
+  if [[ "$1" == start ]]; then service_active=1; fi
+  if [[ "$1" == stop ]]; then service_active=0; fi
   return 0
 }
 openvpn() { :; }
+node() { [[ "$tcp_ready" == 1 ]]; }
 sleep() { :; }
 relay_ensure_forward() { :; }
 resolve_netns() { :; }
@@ -73,8 +76,12 @@ if relay_route_on > "$test_dir/failed-route.log" 2>&1; then echo 'failed route w
 fail_apply=0
 relay_tunnel_down >/dev/null
 tcp_ready=0
-if (relay_tunnel_up) 2>/dev/null; then echo 'TCP startup should fail' >&2; exit 1; fi
-grep -qF 'systemctl stop wg-captive-openvpn.service' "$log"
+stops="$(grep -cF 'systemctl stop wg-captive-openvpn.service' "$log")"
+relay_tunnel_up >/dev/null
+[[ "$(grep -cF 'systemctl stop wg-captive-openvpn.service' "$log")" == "$stops" ]]
+relay_route_on > "$test_dir/pending.log"
+grep -qF 'pending OpenVPN connection' "$test_dir/pending.log"
+[[ -f "$RELAY_ROUTE_FLAG" ]]
 link_exists=0
 tcp_ready=1
 starts="$(grep -cF 'systemctl start wg-captive-openvpn.service' "$log")"
@@ -97,4 +104,4 @@ if relay_acquire_lock relay-reapply; then echo 'busy background lock was accepte
 grep -qF 'flock -n 9' "$log"
 if (relay_acquire_lock relay-enable) 2>/dev/null; then echo 'busy foreground lock was accepted' >&2; exit 1; fi
 grep -qF 'flock -w 2 9' "$log"
-echo 'Relay shell: shared policy, UDP/TCP route, switch guards and TCP startup failure passed'
+echo 'Relay shell: shared policy, UDP/TCP route, switch guards, TCP background retry and pending-route cancellation passed'

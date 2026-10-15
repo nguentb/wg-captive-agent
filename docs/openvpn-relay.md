@@ -159,11 +159,24 @@ sudo nsenter -t "$PID" -n ip route show table 200
 sudo nsenter -t "$PID" -n ip rule show
 ```
 
-OpenVPN chua ket noi sau 20 giay: agent dung service va bao loi; xem journal de phan biet TCP timeout, certificate hoac config. Interface UP khong dam bao exit NAT ra Internet da dung. Test Internet tu user active thay vi curl tren host relay (host khong duoc route qua exit).
+Agent khong tu dung OpenVPN sau 20 giay nua. Start tra ve ngay voi trang thai connecting; service thu lai TCP o nen (10 giay moi lan, khoang nghi tang toi da 5 giay). Endpoint duoc resolve tren host va cac IP cung family duoc dua vao danh sach remote de OpenVPN thu lan luot. Trong luc cho ket noi, co the tat Tunnel bat ky luc nao.
+
+Tunnel chi duoc bao UP khi management socket tra CONNECTED,SUCCESS va TUN co IPv4. IP tren TUN con ton tai do persist-tun khong du de ket luan TLS da ket noi. Management socket nam trong /run/wg-captive-openvpn (0700), chi user root duoc ket noi; khong mo management TCP port. Bat Route khi chua ket noi se ghi nhan yeu cau pending, service chi ap dung route sau khi handshake thanh cong; tat Route huy yeu cau nay. User van dung duong cu trong luc route chua duoc ap dung.
+
+Giao dien tu tai lai trang thai trong luc dang connecting va co nut OpenVPN logs. Interface UP khong dam bao exit NAT ra Internet da dung. Test Internet tu user active thay vi curl tren host relay (host khong duoc route qua exit).
 
 Service tu reconnect khi TCP mat ket noi. Khi wg-easy restart va doi network namespace, service tao lai tunnel trong namespace moi va ap dung lai route neu Relay van enabled. Khi reboot, `wg-captive-relay-restore` khoi phuc giao thuc dang chon.
 
-Bat Relay khi TCP tunnel da co IPv4 se dung lai ket noi hien tai; chi Restart tao lai tunnel. Tac vu khoi phuc route nen khong cho khoa relay, ma thu lai sau neu co thao tac khac. Lenh dieu khien chi cho khoa toi da 2 giay; API tra loi busy thay vi xep chong thao tac. Dung service huy ngay vong cho, co timeout systemd 5 giay. Ket noi TCP moi van co the can toi da 20 giay de handshake; neu het thoi gian, xem journal tren relay de tim loi mang/certificate.
+Bat Relay khi TCP tunnel da CONNECTED se dung lai ket noi hien tai; chi Restart tao lai tunnel. Tac vu khoi phuc route nen khong cho khoa relay, ma thu lai sau neu co thao tac khac; khi reconnect thanh cong, route duoc ap dung lai. Lenh dieu khien chi cho khoa toi da 2 giay; API tra loi busy thay vi xep chong thao tac. Dung service huy ngay vong cho, co timeout systemd 5 giay.
+
+Neu log dung o Attempting to establish TCP connection (chua co TCP connection established), kiem tra tren exit:
+
+```bash
+sudo ss -lntup | grep ':11355'
+docker ps --format 'table {{.Names}}\t{{.Ports}}'
+```
+
+Neu chi thay UDP 11355, relay TCP khong the ket noi. Doi proto cua OpenVPN server thanh tcp-server, xac nhan port noi bo va publish Docker dung /tcp (vi du 11355:11355/tcp khi server nghe port noi bo 11355). Thay mapping Docker can recreate container tu compose/cau hinh trien khai goc, khong chi docker restart; giu nguyen volume/certificate va khong xoa volume. Mo TCP port tren firewall VPS va nha cung cap. Neu chua biet port noi bo thi khong tu gia dinh no la 1194 hoac 11355.
 
 Rule relay dung `ip`, `iptables`, `ipset` tren host thong qua `nsenter`, giong captive agent. Khong can cai ipset trong container wg-easy. Loi ap dung rule se tra ve that bai thay vi van bao route enabled. Chi `wg-quick` va thao tac file config WireGuard van chay trong container.
 
