@@ -14,6 +14,8 @@ openvpn --version
 
 Can OpenVPN 2.6+ (goi mac dinh cua Ubuntu 24.04). Cai lai agent/update de co `wg-captive-openvpn.service`. Khong enable service nay truc tiep; tab Relay/agent quan ly no.
 
+Config TCP xuat tu OpenVPN UI co the giu `user nobody`/`group nogroup`. Import giu lai hai tuy chon ha quyen nay; tai khoan/group phai ton tai tren host relay (Ubuntu co san `nobody`/`nogroup`). Service da bat `persist-key`/`persist-tun` de reconnect sau khi ha quyen. Cac lua chon route/DNS van do agent quan ly.
+
 ## Cai exit tu dong
 
 Script `scripts/install-openvpn-exit.sh` cai OpenVPN TCP tren host exit dang co wg-easy. Tai va chay tren exit (thay IP vi du bang IP public exit that):
@@ -160,6 +162,10 @@ sudo nsenter -t "$PID" -n ip rule show
 OpenVPN chua ket noi sau 20 giay: agent dung service va bao loi; xem journal de phan biet TCP timeout, certificate hoac config. Interface UP khong dam bao exit NAT ra Internet da dung. Test Internet tu user active thay vi curl tren host relay (host khong duoc route qua exit).
 
 Service tu reconnect khi TCP mat ket noi. Khi wg-easy restart va doi network namespace, service tao lai tunnel trong namespace moi va ap dung lai route neu Relay van enabled. Khi reboot, `wg-captive-relay-restore` khoi phuc giao thuc dang chon.
+
+Bat Relay khi TCP tunnel da co IPv4 se dung lai ket noi hien tai; chi Restart tao lai tunnel. Tac vu khoi phuc route nen khong cho khoa relay, ma thu lai sau neu co thao tac khac. Lenh dieu khien chi cho khoa toi da 2 giay; API tra loi busy thay vi xep chong thao tac. Dung service huy ngay vong cho, co timeout systemd 5 giay. Ket noi TCP moi van co the can toi da 20 giay de handshake; neu het thoi gian, xem journal tren relay de tim loi mang/certificate.
+
+Rule relay dung `ip`, `iptables`, `ipset` tren host thong qua `nsenter`, giong captive agent. Khong can cai ipset trong container wg-easy. Loi ap dung rule se tra ve that bai thay vi van bao route enabled. Chi `wg-quick` va thao tac file config WireGuard van chay trong container.
 
 ## API va CLI
 

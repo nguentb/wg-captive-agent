@@ -84,6 +84,14 @@ async function main() {
     await page.getByRole("button", { name: "Use this tunnel" }).click();
     await page.waitForFunction(() => document.querySelector("#relaySelectBtn").textContent === "Selected");
     assert.equal(await page.locator("#relayImportBtn").textContent(), "Import .conf");
+    relay.tunnel_up = false;
+    relay.tunnel_running = true;
+    relay.route_enabled = false;
+    await page.locator("#relayRefreshBtn").click();
+    await page.waitForFunction(() => document.querySelector("#relayActiveLabel").textContent.includes("Connecting / reconnecting"));
+    relay.tunnel_running = false;
+    await page.locator("#relayRefreshBtn").click();
+    await page.waitForFunction(() => document.querySelector("#relayActiveLabel").textContent.includes("Stopped"));
     await page.getByRole("tab", { name: "OpenVPN TCP" }).click();
     fs.mkdirSync(path.resolve(".artifacts"), { recursive: true });
     await page.screenshot({ path: path.resolve(".artifacts/relay-desktop.png"), fullPage: true, animations: "disabled" });

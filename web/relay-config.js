@@ -10,7 +10,7 @@ function normalizeOpenVpnConfig(content) {
   if (text.includes("\0") || text.length > 1024 * 1024) throw new Error("Invalid OpenVPN config");
   const inline = new Set(["ca", "cert", "key", "tls-auth", "tls-crypt", "tls-crypt-v2"]);
   const allowed = new Set([
-    "client", "tls-client", "pull", "nobind", "persist-key", "persist-tun", "auth-nocache",
+    "client", "tls-client", "pull", "nobind", "persist-key", "persist-tun", "auth-nocache", "user", "group",
     "remote-cert-tls", "verify-x509-name", "cipher", "data-ciphers", "data-ciphers-fallback",
     "auth", "key-direction", "tls-version-min", "tls-version-max", "tls-cipher", "tls-ciphersuites",
     "resolv-retry", "connect-retry", "connect-retry-max", "connect-timeout", "server-poll-timeout",
@@ -63,6 +63,7 @@ function normalizeOpenVpnConfig(content) {
     // Routing and DNS belong to the captive agent, including options in exported profiles.
     if (["redirect-gateway", "redirect-private", "route", "route-ipv6", "dhcp-option", "register-dns", "block-outside-dns"].includes(key)) continue;
     if (!allowed.has(key)) throw new Error(`Unsupported OpenVPN option: ${key}. Use a self-contained certificate profile without scripts or external files.`);
+    if (["user", "group"].includes(key) && (tokens.length !== 2 || !/^[A-Za-z_][A-Za-z0-9_.-]*\$?$/.test(tokens[1]))) throw new Error(`Invalid OpenVPN ${key}: expected one local account name`);
     if (key === "allow-compression" && tokens[1] !== "no") throw new Error("OpenVPN compression must be disabled");
     if (key === "remote-cert-tls" && tokens[1] !== "server") throw new Error("OpenVPN must verify the server certificate");
     if (["remote-cert-tls", "route-nopull", "route-noexec"].includes(key)) continue;

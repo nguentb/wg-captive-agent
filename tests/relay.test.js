@@ -42,6 +42,15 @@ test("TCP profile preserves inline credentials and removes exported routes/DNS",
   assert.match(normalizeOpenVpnConfig(ovpn.replaceAll("tls-crypt>", "tls-crypt-v2>")), /<tls-crypt-v2>/);
 });
 
+test("accepts OpenVPN UI privilege-drop options while keeping agent routing", () => {
+  const exported = ovpn + "user nobody\ngroup nogroup\npersist-key\npersist-tun\nredirect-gateway def1\n";
+  const normalized = normalizeOpenVpnConfig(exported);
+  assert.match(normalized, /^user nobody$/m);
+  assert.match(normalized, /^group nogroup$/m);
+  assert.doesNotMatch(normalized, /^redirect-gateway/m);
+  assert.equal(normalizeOpenVpnConfig(normalized), normalized);
+});
+
 test("rejects UDP, mismatched transport, scripts, includes and external secrets", () => {
   for (const config of [
     ovpn.replace("tcp4-client", "udp"),
@@ -53,6 +62,8 @@ test("rejects UDP, mismatched transport, scripts, includes and external secrets"
     ovpn + "auth-user-pass\n",
     ovpn + "script-security 2\n",
     ovpn + "allow-compression yes\n",
+    ovpn + "user nobody extra\n",
+    ovpn + "group /tmp/account\n",
     ovpn.replace("</key>", ""),
   ]) assert.throws(() => normalizeOpenVpnConfig(config));
   assert.throws(() => relayProtocol("invalid"));
@@ -172,5 +183,22 @@ test("backup and restore recover both profiles, selected TCP mode and blocked de
     assert.equal(fs.readFileSync(wgPath, "utf8"), wg);
     assert(commands.some((item) => item.args[0] === "relay-disable"));
     assert(commands.some((item) => item.args[0] === "relay-enable"));
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("interactive relay changes reject a busy queue instead of waiting behind startup", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "captive-relay-test-"));
+  try {
+    const { api } = adminFixture(directory);
+    let finish;
+    const started = api.queueRelayOperation(() => new Promise((resolve) => { finish = resolve; }));
+    await Promise.resolve();
+    await Promise.resolve();
+    let ran = false;
+    await assert.rejects(api.queueRelayOperation(() => { ran = true; }, { wait: false }), /Another relay operation/);
+    assert.equal(ran, false);
+    finish();
+    await started;
+    assert.equal(await api.queueRelayOperation(() => 3, { wait: false }), 3);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

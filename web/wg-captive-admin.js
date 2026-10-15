@@ -23,6 +23,7 @@ let expiryCheckTimer = null;
 let redirectTokenCleanupTimer = null;
 let syncQueue = Promise.resolve();
 let relayQueue = Promise.resolve();
+let relayOperationsPending = 0;
 let dbInitPath = "";
 
 function parseEnv(text) {
@@ -890,13 +891,15 @@ function runRelayAction(action, protocol) {
   if (!allowed.has(action)) throw new Error("Invalid relay action");
   const args = [action];
   if (action === "relay-select") args.push(relayProtocol(protocol));
-  return execFilePromise(AGENT_BIN, args, { timeout: 60000 });
+  return execFilePromise(AGENT_BIN, args, { timeout: 45000 });
 }
 
-function queueRelayOperation(operation) {
+function queueRelayOperation(operation, { wait = true } = {}) {
+  if (!wait && relayOperationsPending) return Promise.reject(new Error("Another relay operation is running; retry when it finishes"));
+  relayOperationsPending++;
   const pending = relayQueue.catch(() => {}).then(operation);
   relayQueue = pending;
-  return pending;
+  return pending.finally(() => { relayOperationsPending--; });
 }
 
 async function applyRelayEnabled(enabled) {
@@ -1068,7 +1071,7 @@ function renderRelay(){
   const relay=state.relay||{};const selected=relay.protocol||'wireguard';const running=relay.tunnel_running||relay.tunnel_up;if(!relayView)relayView=selected;
   const profile=relay.profiles?.[relayView]||{};const current=relayView===selected;const name=relayView==='openvpn'?'OpenVPN TCP':'WireGuard UDP';
   document.querySelectorAll('[data-relay-protocol]').forEach((btn)=>{const active=btn.dataset.relayProtocol===relayView;btn.classList.toggle('active',active);btn.setAttribute('aria-selected',String(active));btn.disabled=relayBusy});
-  $('relayActiveLabel').textContent=(selected==='openvpn'?'OpenVPN TCP':'WireGuard UDP')+' / '+(relay.route_enabled?'Routing enabled':(running?'Tunnel running':'Stopped'));
+  $('relayActiveLabel').textContent=(selected==='openvpn'?'OpenVPN TCP':'WireGuard UDP')+' / '+(relayBusy?'Updating...':(relay.tunnel_up?(relay.route_enabled?'Routing enabled':'Tunnel connected'):(running?'Connecting / reconnecting':'Stopped')));
   $('relayProfileTitle').textContent=name;$('relayProfileState').textContent=(profile.imported?'Config imported':'No config')+' / '+(current?'Selected':'Standby');
   $('relaySelectBtn').disabled=relayBusy||current||running||relay.route_enabled;$('relaySelectBtn').textContent=current?'Selected':'Use this tunnel';
   $('relayConfFile').accept=relayView==='openvpn'?'.ovpn,text/plain':'.conf,text/plain';$('relayImportBtn').textContent=relayView==='openvpn'?'Import .ovpn':'Import .conf';
@@ -1302,7 +1305,7 @@ async function handleApi(req, res) {
       const current = loadConfig();
       if (action !== "relay-select" && body.protocol && relayProtocol(body.protocol) !== (current.RELAY_PROTOCOL || "wireguard")) throw new Error("Select this tunnel before changing its state");
       return runRelayAction(action, body.protocol);
-    });
+    }, { wait: false });
     const nextConfig = loadConfig();
     const relay = relayStatus(nextConfig);
     relay.last_result = result;

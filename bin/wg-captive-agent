@@ -32,6 +32,7 @@ RELAY_ROUTE_FLAG="${RELAY_ROUTE_FLAG:-/etc/wg-captive-relay.enabled}"
 RELAY_PROTOCOL="wireguard"
 RELAY_OPENVPN_CONF="${RELAY_OPENVPN_CONF:-/etc/wg-captive-relay-exit.ovpn}"
 RELAY_WG_EXIT_IF="$RELAY_EXIT_IF"
+RELAY_LOCK_FILE="${RELAY_LOCK_FILE:-/run/wg-captive-agent/relay.lock}"
 CAPTIVE_MARK="${CAPTIVE_MARK:-0x19}"
 CAPTIVE_MARK_PRIORITY="${CAPTIVE_MARK_PRIORITY:-1000}"
 RELAY_MARK="${RELAY_MARK:-0x20}"
@@ -265,11 +266,17 @@ ensure_firewall() {
 
 
 relay_exec() {
+  resolve_netns
+  # Use the same host tools/backend as captive, even if the image lacks ipset.
+  net_exec sh -ec "$1"
+}
+
+relay_wg_exec() {
   if [[ -n "$WG_EASY_CONTAINER" && "$WG_EASY_CONTAINER" != "host" ]]; then
     command -v docker >/dev/null 2>&1 || die "docker is required when WG_EASY_CONTAINER is set"
-    docker exec "$WG_EASY_CONTAINER" sh -c "$1"
+    docker exec "$WG_EASY_CONTAINER" sh -ec "$1"
   else
-    sh -c "$1"
+    sh -ec "$1"
   fi
 }
 
@@ -282,7 +289,7 @@ relay_copy_conf() {
   if [[ -n "$WG_EASY_CONTAINER" && "$WG_EASY_CONTAINER" != "host" ]]; then
     command -v docker >/dev/null 2>&1 || die "docker is required when WG_EASY_CONTAINER is set"
     docker cp "/etc/wireguard/${RELAY_EXIT_IF}.conf" "$WG_EASY_CONTAINER:/etc/wireguard/${RELAY_EXIT_IF}.conf"
-    relay_exec "chmod 600 '/etc/wireguard/${RELAY_EXIT_IF}.conf'"
+    relay_wg_exec "chmod 600 '/etc/wireguard/${RELAY_EXIT_IF}.conf'"
   fi
 }
 
@@ -318,15 +325,27 @@ iptables -t mangle -A '$RELAY_MARK_CHAIN' -j MARK --set-mark '$RELAY_MARK'
 "
 }
 
+relay_tunnel_ready() {
+  if [[ "$RELAY_PROTOCOL" == openvpn ]]; then
+    relay_exec "ip -4 addr show dev tun-exit 2>/dev/null | grep -q 'inet '"
+  else
+    relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1"
+  fi
+}
+
 relay_tunnel_up() {
   if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
     db_write_relay_conf
     [[ -s "$RELAY_EXIT_CONF" ]] || die "import OpenVPN TCP config first"
     command -v openvpn >/dev/null 2>&1 || die "openvpn is required; install with apt install openvpn"
-    systemctl restart wg-captive-openvpn.service
+    if systemctl is-active --quiet wg-captive-openvpn.service && relay_tunnel_ready; then
+      echo "relay_tunnel: up"
+      return
+    fi
+    systemctl start wg-captive-openvpn.service
     local attempt
     for attempt in {1..20}; do
-      if relay_exec "ip -4 addr show dev tun-exit 2>/dev/null | grep -q 'inet '"; then
+      if relay_tunnel_ready; then
         echo "relay_tunnel: up"
         return
       fi
@@ -338,8 +357,8 @@ relay_tunnel_up() {
     die "OpenVPN did not connect within 20 seconds; check journalctl -u wg-captive-openvpn"
   fi
   relay_copy_conf
-  relay_exec "wg-quick down '$RELAY_EXIT_IF' 2>/dev/null || true"
-  relay_exec "wg-quick up '$RELAY_EXIT_IF'"
+  relay_wg_exec "wg-quick down '$RELAY_EXIT_IF' 2>/dev/null || true"
+  relay_wg_exec "wg-quick up '$RELAY_EXIT_IF'"
   echo "relay_tunnel: up"
 }
 
@@ -349,7 +368,7 @@ relay_tunnel_down() {
     echo "relay_tunnel: down"
     return
   fi
-  relay_exec "wg-quick down '$RELAY_EXIT_IF' 2>/dev/null || true"
+  relay_wg_exec "wg-quick down '$RELAY_EXIT_IF' 2>/dev/null || true"
   echo "relay_tunnel: down"
 }
 
@@ -374,21 +393,25 @@ iptables -X WG_RELAY 2>/dev/null || true
 }
 
 relay_route_on() {
+  local allow_start="${1:-yes}"
   db_write_relay_conf
   [[ -f "$RELAY_EXIT_CONF" ]] || die "import relay exit config before enabling route"
   relay_ensure_forward
   resolve_netns
   sync_blocked_dest_ipset
-  relay_ensure_captive_mark
-  relay_ensure_route_mark
-  relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1" || relay_tunnel_up
+  relay_ensure_captive_mark || return 1
+  relay_ensure_route_mark || return 1
+  if ! relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1"; then
+    [[ "$allow_start" == yes ]] || return 1
+    relay_tunnel_up
+  fi
   if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
     relay_exec "ip -4 addr show dev tun-exit | grep -q 'inet '" || die "OpenVPN tunnel has no IPv4 address"
   fi
   relay_route_off >/dev/null 2>&1 || true
-  relay_ensure_captive_mark
-  relay_ensure_route_mark
-  relay_exec "
+  relay_ensure_captive_mark || return 1
+  relay_ensure_route_mark || return 1
+  if ! relay_exec "
 iptables -N WG_RELAY 2>/dev/null || true
 iptables -F WG_RELAY
 iptables -C FORWARD -j WG_RELAY 2>/dev/null || iptables -A FORWARD -j WG_RELAY
@@ -396,7 +419,11 @@ iptables -A WG_RELAY -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j ACCEPT
 ip route add default dev '$RELAY_EXIT_IF' table '$RELAY_ROUTE_TABLE'
 ip rule add priority '$RELAY_RULE_PRIORITY' fwmark '$RELAY_MARK' table '$RELAY_ROUTE_TABLE'
 iptables -t nat -A POSTROUTING -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j MASQUERADE
-"
+"; then
+    relay_route_off >/dev/null 2>&1 || true
+    echo 'wg-captive-agent: failed to apply relay routing/firewall' >&2
+    return 1
+  fi
   touch "$RELAY_ROUTE_FLAG"
   db_set_relay_enabled 1
   echo "relay_route: enabled"
@@ -420,8 +447,8 @@ relay_restore() {
 relay_reapply() {
   # Re-check intent under relay.lock: a queued reconnect must not undo a manual stop.
   [[ "$RELAY_PROTOCOL" == openvpn && -f "$RELAY_ROUTE_FLAG" ]] || return 0
-  relay_exec "ip -4 addr show dev tun-exit 2>/dev/null | grep -q 'inet '" || return 0
-  relay_route_on
+  relay_tunnel_ready || return 75
+  relay_route_on no
 }
 
 relay_select() {
@@ -476,7 +503,7 @@ relay_delete_config() {
   rm -f "$RELAY_EXIT_CONF"
   if [[ "$RELAY_PROTOCOL" == "wireguard" ]]; then
     rm -f "/etc/wireguard/${RELAY_EXIT_IF}.conf"
-    relay_exec "rm -f '/etc/wireguard/${RELAY_EXIT_IF}.conf'"
+    relay_wg_exec "rm -f '/etc/wireguard/${RELAY_EXIT_IF}.conf'"
   fi
   db_clear_relay_conf
   echo "relay_config: deleted"
@@ -495,7 +522,7 @@ relay_status() {
   fi
   echo
   echo "=== Tunnel ==="
-  if relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1"; then
+  if relay_tunnel_ready; then
     echo "tunnel: UP"
     if [[ "$RELAY_PROTOCOL" == "wireguard" ]]; then
       relay_exec "wg show '$RELAY_EXIT_IF' 2>/dev/null || true"
@@ -682,13 +709,23 @@ run_loop() {
   done
 }
 
+relay_acquire_lock() {
+  local command="$1"
+  install -d -m 0755 "$(dirname "$RELAY_LOCK_FILE")"
+  exec 9>"$RELAY_LOCK_FILE"
+  # The supervisor must never queue behind the operation controlling its service.
+  if [[ "$command" == relay-reapply ]]; then
+    flock -n 9 || return 75
+  else
+    flock -w 2 9 || die "another relay operation is still running; retry shortly"
+  fi
+}
+
 main() {
   local command="${1:-run}"
   if [[ "$command" == relay-* && "$command" != "relay-status" ]]; then
     require_root
-    install -d -m 0755 /run/wg-captive-agent
-    exec 9>/run/wg-captive-agent/relay.lock
-    flock -w 30 9 || die "another relay operation is still running"
+    relay_acquire_lock "$command" || exit "$?"
     db_load_runtime_config
   fi
 

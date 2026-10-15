@@ -49,6 +49,9 @@ systemctl enable --now wg-captive-admin
 systemctl enable --now wg-captive-redirect
 systemctl enable wg-captive-relay-restore
 systemctl restart wg-captive-admin wg-captive-redirect wg-captive-agent
+if systemctl is-active --quiet wg-captive-openvpn.service; then
+  systemctl restart wg-captive-openvpn.service
+fi
 systemctl start wg-captive-relay-restore || true
 
 log "Update complete"
