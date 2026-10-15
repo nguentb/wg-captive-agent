@@ -14,6 +14,33 @@ openvpn --version
 
 Can OpenVPN 2.6+ (goi mac dinh cua Ubuntu 24.04). Cai lai agent/update de co `wg-captive-openvpn.service`. Khong enable service nay truc tiep; tab Relay/agent quan ly no.
 
+## Cai exit tu dong
+
+Script `scripts/install-openvpn-exit.sh` cai OpenVPN TCP tren host exit dang co wg-easy. Tai va chay tren exit (thay IP vi du bang IP public exit that):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nguentb/wg-captive-agent/main/scripts/install-openvpn-exit.sh -o /root/install-openvpn-exit.sh
+sudo bash /root/install-openvpn-exit.sh --endpoint 203.0.113.10
+```
+
+Mac dinh TCP 8443, subnet `10.250.240.0/24`, client `relay-node`, file xuat `/root/relay-node.ovpn`. Doi cong/tao client rieng bang `--port 9443 --client relay-node-2`. Moi relay nen dung client name rieng. Chay lai giu CA, server key va certificate client da co; them client moi van restart service OpenVPN nay.
+
+Script kiem tra cong dang dung va subnet tren host/wg-easy mac dinh, tu tao certificate, service va NAT. Rule rieng trong cac chain `WG_TCP_EXIT_*` duoc khoi phuc qua service `wg-captive-exit-firewall` sau reboot. Script khong flush firewall chung, khong restart Docker/wg-easy va khong luu snapshot cac rule Docker. Neu da cai thu cong `captive-tcp.conf`, script dung de tranh ghi de; tiep tuc dung cach thu cong ben duoi.
+
+Can mo TCP 8443 (hoac cong da chon) tren firewall nha cung cap. Sau khi reload UFW/firewall thu cong, ap dung lai rule OpenVPN neu can:
+
+```bash
+sudo systemctl restart wg-captive-exit-firewall
+```
+
+Kiem tra:
+
+```bash
+sudo systemctl status openvpn-server@captive-tcp --no-pager
+sudo journalctl -u openvpn-server@captive-tcp -n 50 --no-pager
+sudo ss -lntp 'sport = :8443'
+```
+
 ## Cai exit TCP tren Ubuntu 24.04
 
 Thuc hien tren **exit**, khong phai relay. Vi du dung TCP 8443 va subnet tunnel `10.250.240.0/24`. Doi subnet neu trung voi WireGuard, Docker hoac mang khac. Mo TCP 8443 tren firewall cua nha cung cap va firewall host; co the gioi han nguon la IP public cua relay.

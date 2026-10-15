@@ -234,6 +234,7 @@ Tab `Relay`:
 - Tunnel/Restart/Route quan ly giao thuc dang chon. Dung tunnel se tat route truoc. Khong thay config dang chay; config du phong co the import trong khi tunnel con lai dang chay.
 - Nut Refresh tai lai status thu cong. Config cua ca hai tunnel va giao thuc dang chon nam trong SQLite, duoc backup/restore cung `state-db`.
 - Huong dan cai exit TCP va tao `.ovpn`: [OpenVPN TCP relay](docs/openvpn-relay.md).
+- Cai exit tu dong: chuyen `scripts/install-openvpn-exit.sh` len exit, chay `sudo bash /root/install-openvpn-exit.sh --endpoint IP_PUBLIC_EXIT`. Script xuat `/root/relay-node.ovpn`, tu tao NAT persistent va giu wg-easy dang chay.
 - `Enable route`/`Disable route` tao mangle chain `WG_RELAY_MARK`: client trong `RELAY_CLIENT_SUBNET` se duoc mark de di qua table relay, nhung IP dang nam trong ipset `wg_expired` se bi bo qua truoc khi mark.
 - DNS cua client khong di qua exit: `udp/53`, `tcp/53` va `tcp/853` duoc bo qua trong chain relay mark, nen resolve DNS van xu ly tai node relay/duong ra mac dinh cua node.
 - Vi relay chi route traffic da duoc `WG_RELAY_MARK`, user bi `disabled`/`expired` van giu co che captive popup/portal; user active moi di qua exit node.
