@@ -30,6 +30,8 @@ RELAY_CLIENT_SUBNET="${RELAY_CLIENT_SUBNET:-10.8.0.0/24}"
 RELAY_ROUTE_TABLE="${RELAY_ROUTE_TABLE:-200}"
 RELAY_EXIT_CONF="${RELAY_EXIT_CONF:-/etc/wg-captive-relay-exit.conf}"
 RELAY_ROUTE_FLAG="${RELAY_ROUTE_FLAG:-/etc/wg-captive-relay.enabled}"
+RELAY_TUNNEL_FLAG="${RELAY_TUNNEL_FLAG:-/etc/wg-captive-relay-tunnel.state}"
+RELAY_HEALTH_FILE="${RELAY_HEALTH_FILE:-/run/wg-captive-agent/relay-health}"
 RELAY_PROTOCOL="wireguard"
 RELAY_OPENVPN_CONF="${RELAY_OPENVPN_CONF:-/etc/wg-captive-relay-exit.ovpn}"
 RELAY_AMNEZIAWG_CONF="${RELAY_AMNEZIAWG_CONF:-/etc/wg-captive-relay-awg.conf}"
@@ -292,15 +294,15 @@ relay_wg_exec() {
 }
 
 relay_copy_conf() {
-  db_write_relay_conf
+  db_write_relay_conf || return 1
   [[ -f "$RELAY_EXIT_CONF" ]] || die "relay config not found: $RELAY_EXIT_CONF"
-  install -d -m 0755 /etc/wireguard
-  install -m 0600 "$RELAY_EXIT_CONF" "/etc/wireguard/${RELAY_EXIT_IF}.conf"
+  install -d -m 0755 /etc/wireguard || return 1
+  install -m 0600 "$RELAY_EXIT_CONF" "/etc/wireguard/${RELAY_EXIT_IF}.conf" || return 1
 
   if [[ -n "$WG_EASY_CONTAINER" && "$WG_EASY_CONTAINER" != "host" ]]; then
     command -v docker >/dev/null 2>&1 || die "docker is required when WG_EASY_CONTAINER is set"
-    docker cp "/etc/wireguard/${RELAY_EXIT_IF}.conf" "$WG_EASY_CONTAINER:/etc/wireguard/${RELAY_EXIT_IF}.conf"
-    relay_wg_exec "chmod 600 '/etc/wireguard/${RELAY_EXIT_IF}.conf'"
+    docker cp "/etc/wireguard/${RELAY_EXIT_IF}.conf" "$WG_EASY_CONTAINER:/etc/wireguard/${RELAY_EXIT_IF}.conf" || return 1
+    relay_wg_exec "chmod 600 '/etc/wireguard/${RELAY_EXIT_IF}.conf'" || return 1
   fi
 }
 
@@ -355,7 +357,7 @@ relay_tunnel_up() {
     db_write_relay_conf
     [[ -s "$RELAY_EXIT_CONF" ]] || die "import AmneziaWG config first"
     command -v awg >/dev/null && command -v awg-quick >/dev/null && command -v amneziawg-go >/dev/null || die "AmneziaWG tools missing; run wg-captive-install-amneziawg"
-    systemctl start wg-captive-amneziawg.service
+    systemctl start wg-captive-amneziawg.service || return 1
     echo "relay_tunnel: starting AmneziaWG (check status and latest handshake)"
     return
   fi
@@ -367,24 +369,24 @@ relay_tunnel_up() {
       echo "relay_tunnel: up"
       return
     fi
-    systemctl start wg-captive-openvpn.service
+    systemctl start wg-captive-openvpn.service || return 1
     echo "relay_tunnel: connecting (retries continue in background; check OpenVPN connection state)"
     return
   fi
-  relay_copy_conf
+  relay_copy_conf || return 1
   relay_wg_exec "wg-quick down '$RELAY_EXIT_IF' 2>/dev/null || true"
-  relay_wg_exec "wg-quick up '$RELAY_EXIT_IF'"
+  relay_wg_exec "wg-quick up '$RELAY_EXIT_IF'" || return 1
   echo "relay_tunnel: up"
 }
 
 relay_tunnel_down() {
   if [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
-    systemctl stop wg-captive-amneziawg.service
+    systemctl stop wg-captive-amneziawg.service || return 1
     echo "relay_tunnel: down"
     return
   fi
   if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
-    systemctl stop wg-captive-openvpn.service
+    systemctl stop wg-captive-openvpn.service || return 1
     echo "relay_tunnel: down"
     return
   fi
@@ -469,6 +471,35 @@ relay_restart() {
   fi
 }
 
+relay_tunnel_intent() {
+  install -d -m 0755 "$(dirname "$RELAY_TUNNEL_FLAG")"
+  (umask 077; printf '%s:%s:%s:%s\n' "$1" "$RELAY_PROTOCOL" "$(date +%s)" "$RANDOM" > "$RELAY_TUNNEL_FLAG")
+}
+
+relay_watchdog_adopt() {
+  [[ ! -f "$RELAY_TUNNEL_FLAG" ]] || return 0
+  [[ "$RELAY_PROTOCOL" == wireguard || "$RELAY_PROTOCOL" == amneziawg ]] || return 0
+  if relay_tunnel_ready; then relay_tunnel_intent enabled; fi
+}
+
+relay_recover() {
+  local expected="${1:-}" current="" route_wanted=0 result=0
+  [[ -n "$expected" && -f "$RELAY_TUNNEL_FLAG" ]] || return 0
+  current="$(cat "$RELAY_TUNNEL_FLAG")"
+  [[ "$current" == "$expected" && "$current" == "enabled:$RELAY_PROTOCOL:"* ]] || return 0
+  [[ "$RELAY_PROTOCOL" == wireguard || "$RELAY_PROTOCOL" == amneziawg ]] || return 0
+  [[ ! -f "$RELAY_ROUTE_FLAG" ]] || route_wanted=1
+  echo "relay_watchdog: restarting $RELAY_PROTOCOL tunnel"
+  relay_tunnel_down || return 1
+  relay_tunnel_up || return 1
+  if [[ "$route_wanted" == 1 ]]; then
+    relay_route_on || result=$?
+    # A failed apply must not erase the operator's requested routing during recovery.
+    if [[ "$result" != 0 ]]; then touch "$RELAY_ROUTE_FLAG"; db_set_relay_enabled 1; fi
+  fi
+  return "$result"
+}
+
 relay_restore() {
   if [[ -f "$RELAY_ROUTE_FLAG" ]]; then
     relay_tunnel_up
@@ -535,6 +566,7 @@ relay_delete_config() {
     die "turn off relay route before deleting exit config"
   fi
 
+  relay_tunnel_intent disabled
   rm -f "$RELAY_EXIT_CONF"
   if [[ "$RELAY_PROTOCOL" == "wireguard" ]]; then
     rm -f "/etc/wireguard/${RELAY_EXIT_IF}.conf"
@@ -552,6 +584,9 @@ relay_status() {
   echo "relay_exit_if: $RELAY_EXIT_IF"
   echo "relay_client_subnet: $RELAY_CLIENT_SUBNET"
   echo "relay_route_table: $RELAY_ROUTE_TABLE"
+  if [[ -f "$RELAY_HEALTH_FILE" ]]; then
+    grep -E '^watchdog_(state|failures|last_check|last_restart):' "$RELAY_HEALTH_FILE" || true
+  fi
   if [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
     echo "amneziawg_service: $(systemctl is-active wg-captive-amneziawg.service 2>/dev/null || true)"
     echo "amneziawg_tools: $(command -v awg >/dev/null && command -v awg-quick >/dev/null && command -v amneziawg-go >/dev/null && echo installed || echo missing)"
@@ -760,7 +795,7 @@ relay_acquire_lock() {
   install -d -m 0755 "$(dirname "$RELAY_LOCK_FILE")"
   exec 9>"$RELAY_LOCK_FILE"
   # The supervisor must never queue behind the operation controlling its service.
-  if [[ "$command" == relay-reapply ]]; then
+  if [[ "$command" == relay-reapply || "$command" == relay-recover || "$command" == relay-watchdog-adopt ]]; then
     flock -n 9 || return 75
   else
     flock -w 2 9 || die "another relay operation is still running; retry shortly"
@@ -774,6 +809,12 @@ main() {
     relay_acquire_lock "$command" || exit "$?"
     db_load_runtime_config
   fi
+
+  case "$command" in
+    relay-enable|relay-tunnel-up|relay-restart|relay-on) relay_tunnel_intent enabled ;;
+    relay-disable|relay-tunnel-down) relay_tunnel_intent disabled ;;
+    relay-restore) [[ ! -f "$RELAY_ROUTE_FLAG" ]] || relay_tunnel_intent enabled ;;
+  esac
 
   case "$command" in
     run)
@@ -836,6 +877,12 @@ main() {
     relay-reapply)
       relay_reapply
       ;;
+    relay-recover)
+      relay_recover "${2:-}"
+      ;;
+    relay-watchdog-adopt)
+      relay_watchdog_adopt
+      ;;
     -h|--help|help)
       usage
       ;;
@@ -846,4 +893,4 @@ main() {
   esac
 }
 
-main "$@"
+[[ "${WG_CAPTIVE_LIBRARY:-0}" == 1 ]] || main "$@"

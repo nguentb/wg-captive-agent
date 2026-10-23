@@ -10,7 +10,8 @@ node --check web/wg-captive-admin.js
 node --check web/relay-config.js
 node --check web/openvpn-state.js
 node --check web/amnezia-config.js
-for script in bin/wg-captive-agent bin/wg-captive-redirect bin/wg-captive-openvpn bin/wg-captive-amneziawg scripts/install-amneziawg.sh scripts/remove-legacy-xray.sh; do
+node --check web/relay-probe.js
+for script in bin/wg-captive-agent bin/wg-captive-redirect bin/wg-captive-openvpn bin/wg-captive-amneziawg bin/wg-captive-watchdog scripts/install-amneziawg.sh scripts/remove-legacy-xray.sh; do
   bash -n "$script"
 done
 
@@ -56,11 +57,13 @@ fi
 chmod 0600 /etc/wg-captive-agent.env
 
 # Normalize old env quoting before the previous agent sources it during cleanup.
+systemctl stop wg-captive-watchdog.timer wg-captive-watchdog.service 2>/dev/null || true
 bash scripts/remove-legacy-xray.sh
 install -m 0755 bin/wg-captive-agent /usr/local/sbin/wg-captive-agent
 install -m 0755 bin/wg-captive-redirect /usr/local/sbin/wg-captive-redirect
 install -m 0755 bin/wg-captive-openvpn /usr/local/sbin/wg-captive-openvpn
 install -m 0755 bin/wg-captive-amneziawg /usr/local/sbin/wg-captive-amneziawg
+install -m 0755 bin/wg-captive-watchdog /usr/local/sbin/wg-captive-watchdog
 install -m 0755 scripts/install-amneziawg.sh /usr/local/bin/wg-captive-install-amneziawg
 install -m 0755 scripts/wg-captive-update /usr/local/bin/wg-captive-update
 install -m 0755 scripts/wg-captive-ssl-cloudflare /usr/local/bin/wg-captive-ssl-cloudflare
@@ -75,6 +78,7 @@ install -m 0755 web/wg-captive-admin.js /usr/local/lib/wg-captive-agent/wg-capti
 install -m 0644 web/relay-config.js /usr/local/lib/wg-captive-agent/relay-config.js
 install -m 0644 web/openvpn-state.js /usr/local/lib/wg-captive-agent/openvpn-state.js
 install -m 0644 web/amnezia-config.js /usr/local/lib/wg-captive-agent/amnezia-config.js
+install -m 0644 web/relay-probe.js /usr/local/lib/wg-captive-agent/relay-probe.js
 
 if [[ ! -f /etc/wg-captive-expired.txt ]]; then
   install -m 0644 examples/wg-captive-expired.txt /etc/wg-captive-expired.txt
@@ -86,8 +90,12 @@ install -m 0644 systemd/wg-captive-redirect.service /etc/systemd/system/wg-capti
 install -m 0644 systemd/wg-captive-relay-restore.service /etc/systemd/system/wg-captive-relay-restore.service
 install -m 0644 systemd/wg-captive-openvpn.service /etc/systemd/system/wg-captive-openvpn.service
 install -m 0644 systemd/wg-captive-amneziawg.service /etc/systemd/system/wg-captive-amneziawg.service
+install -m 0644 systemd/wg-captive-watchdog.service /etc/systemd/system/wg-captive-watchdog.service
+install -m 0644 systemd/wg-captive-watchdog.timer /etc/systemd/system/wg-captive-watchdog.timer
 
 systemctl daemon-reload
+/usr/local/sbin/wg-captive-agent relay-watchdog-adopt || true
+systemctl enable --now wg-captive-watchdog.timer
 
 if systemctl is-active --quiet wg-captive-admin.service; then
   systemctl enable --now wg-captive-redirect.service

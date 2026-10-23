@@ -1,0 +1,10 @@
+[Unit]
+Description=Check WireGuard and AmneziaWG relay health
+After=network-online.target docker.service wg-captive-admin.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/wg-captive-watchdog
+TimeoutStartSec=50
+TimeoutStopSec=5
+UMask=0077

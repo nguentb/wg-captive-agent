@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+set -euo pipefail
+AGENT_BIN="${AGENT_BIN:-/usr/local/sbin/wg-captive-agent}"
+WG_CAPTIVE_LIBRARY=1 source "$AGENT_BIN"
+WATCHDOG_DIR="${RELAY_WATCHDOG_DIR:-/run/wg-captive-agent}"
+WATCHDOG_STATE="$WATCHDOG_DIR/watchdog.state"
+PROBE_OWNER="$WATCHDOG_DIR/probe.owner"
+PROBE_HELPER="${RELAY_PROBE_HELPER:-/usr/local/lib/wg-captive-agent/relay-probe.js}"
+PROBE_TABLE=201
+PROBE_PRIORITY=1999
+PROBE_ROUTE_PROTOCOL=186
+PROBE_TARGETS=(1.1.1.1 8.8.8.8 9.9.9.9)
+WATCHDOG_COOLDOWN=30
+probe_source=""
+probe_owned=0
+
+watchdog_cleanup() {
+  if [[ "$probe_owned" == 1 ]]; then
+    net_exec ip -4 rule del priority "$PROBE_PRIORITY" from "$probe_source/32" lookup "$PROBE_TABLE" 2>/dev/null || true
+    net_exec ip -4 route flush table "$PROBE_TABLE" proto "$PROBE_ROUTE_PROTOCOL" 2>/dev/null || true
+    probe_owned=0
+  fi
+}
+
+watchdog_rx() {
+  local output
+  if [[ "$RELAY_PROTOCOL" == wireguard ]]; then
+    if [[ -n "$WG_EASY_CONTAINER" && "$WG_EASY_CONTAINER" != host ]]; then
+      output="$(timeout 4 docker exec "$WG_EASY_CONTAINER" wg show "$RELAY_EXIT_IF" transfer 2>/dev/null)" || return 1
+    else
+      output="$(timeout 4 wg show "$RELAY_EXIT_IF" transfer 2>/dev/null)" || return 1
+    fi
+  else
+    output="$(net_exec timeout 4 awg show "$RELAY_EXIT_IF" transfer 2>/dev/null)" || return 1
+  fi
+  [[ -n "$output" ]] || return 1
+  printf '%s\n' "$output" | awk 'NF != 3 || $2 !~ /^[0-9]+$/ {bad=1} {sum+=$2} END {if(bad) exit 1; printf "%.0f\n",sum}'
+}
+
+watchdog_probe_setup() {
+  local routes rules address old_source="" old_namespace=""
+  address="$(net_exec ip -o -4 addr show dev "$RELAY_EXIT_IF" 2>/dev/null | awk '$3=="inet" {split($4,a,"/");print a[1];exit}')"
+  [[ "$address" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  probe_source="$address"
+  # Reap only our tagged routes after SIGKILL/timeout; never flush a foreign table.
+  if [[ -f "$PROBE_OWNER" ]]; then
+    read -r old_source old_namespace < "$PROBE_OWNER" || true
+    if [[ "$old_source" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ && "$old_namespace" == "${NETNS_PID:-host}" ]]; then
+      net_exec ip -4 rule del priority "$PROBE_PRIORITY" from "$old_source/32" lookup "$PROBE_TABLE" 2>/dev/null || true
+      net_exec ip -4 route flush table "$PROBE_TABLE" proto "$PROBE_ROUTE_PROTOCOL" 2>/dev/null || true
+    fi
+    rm -f "$PROBE_OWNER"
+  fi
+  # This table/priority are reserved for probes. Refuse foreign rules, never overwrite them.
+  routes="$(net_exec ip -4 route show table "$PROBE_TABLE" 2>/dev/null || true)"
+  rules="$(net_exec ip -4 rule show | awk -v p="$PROBE_PRIORITY:" '$1==p')"
+  [[ -z "$routes" && -z "$rules" ]] || return 2
+  (umask 077; printf '%s %s\n' "$probe_source" "${NETNS_PID:-host}" > "$PROBE_OWNER")
+  probe_owned=1
+  net_exec ip -4 route add prohibit default table "$PROBE_TABLE" proto "$PROBE_ROUTE_PROTOCOL" || return 2
+  local target
+  for target in "${PROBE_TARGETS[@]}"; do
+    net_exec ip -4 route add "$target/32" dev "$RELAY_EXIT_IF" src "$probe_source" table "$PROBE_TABLE" proto "$PROBE_ROUTE_PROTOCOL" || return 2
+  done
+  net_exec ip -4 rule add priority "$PROBE_PRIORITY" from "$probe_source/32" lookup "$PROBE_TABLE" || return 2
+}
+
+watchdog_probe_target() {
+  local target="$1"
+  net_exec timeout 3 ping -4 -n -I "$probe_source" -c 1 -W 2 "$target" >/dev/null 2>&1 && return 0
+  # TCP fallback avoids declaring an ICMP-only filter to be a dead tunnel.
+  net_exec timeout 3 node "$PROBE_HELPER" "$target" "$probe_source" >/dev/null 2>&1
+}
+
+watchdog_probe() {
+  local recovering="${1:-0}" result=0 target
+  watchdog_probe_setup || result=$?
+  if [[ "$result" != 0 ]]; then watchdog_cleanup; return "$result"; fi
+  for target in "${PROBE_TARGETS[@]}"; do
+    if watchdog_probe_target "$target"; then watchdog_cleanup; return 0; fi
+    # Once the outage is confirmed, only check the primary target for recovery.
+    [[ "$recovering" != 1 ]] || break
+  done
+  watchdog_cleanup
+  return 1
+}
+
+watchdog_save() {
+  local status="$1"
+  (umask 077; printf '%s %s %s %s %s %s\n' "$identity" "$rx" "$failures" "$recovering" "$next_restart" "$last_restart" > "$WATCHDOG_STATE.tmp")
+  mv -f "$WATCHDOG_STATE.tmp" "$WATCHDOG_STATE"
+  (umask 077; printf 'watchdog_state: %s\nwatchdog_failures: %s\nwatchdog_last_check: %s\nwatchdog_last_restart: %s\n' "$status" "$failures" "$now" "$last_restart" > "$RELAY_HEALTH_FILE.tmp")
+  mv -f "$RELAY_HEALTH_FILE.tmp" "$RELAY_HEALTH_FILE"
+}
+
+watchdog_tick() {
+  local intent="" old_identity="" previous_rx=-1 failures=0 recovering=0 next_restart=0 last_restart=0 rx=-1 identity="idle" now result=0
+  now="$(date +%s)"
+  [[ ! -f "$RELAY_TUNNEL_FLAG" ]] || intent="$(cat "$RELAY_TUNNEL_FLAG")"
+  if [[ "$RELAY_PROTOCOL" != wireguard && "$RELAY_PROTOCOL" != amneziawg ]] || [[ "$intent" != "enabled:$RELAY_PROTOCOL:"* ]]; then
+    watchdog_save idle
+    return
+  fi
+  resolve_netns
+  identity="$intent:${NETNS_PID:-host}"
+  if [[ -f "$WATCHDOG_STATE" ]]; then
+    read -r old_identity previous_rx failures recovering next_restart last_restart < "$WATCHDOG_STATE" || true
+  fi
+  if [[ ! "$previous_rx" =~ ^-?[0-9]+$ || ! "$failures" =~ ^[0-9]+$ || ! "$recovering" =~ ^[01]$ || ! "$next_restart" =~ ^[0-9]+$ || ! "$last_restart" =~ ^[0-9]+$ ]]; then
+    old_identity=""
+  fi
+  if [[ "$old_identity" != "$identity" ]]; then
+    previous_rx=-1; failures=0; recovering=0; next_restart=0; last_restart=0
+  fi
+  rx="$(watchdog_rx)" || rx=-1
+  # First sample is probed too: a historical nonzero counter is not current health.
+  if [[ "$previous_rx" != -1 && "$rx" -gt "$previous_rx" ]]; then
+    failures=0; recovering=0; next_restart=0
+    watchdog_save healthy_rx
+    return
+  fi
+  watchdog_probe "$recovering" || result=$?
+  if [[ "$result" == 0 ]]; then
+    rx="$(watchdog_rx)" || rx=-1
+    failures=0; recovering=0; next_restart=0
+    watchdog_save healthy_probe
+    return
+  elif [[ "$result" == 2 ]]; then
+    watchdog_save probe_setup_error
+    echo 'relay_watchdog: probe routing unavailable/conflicts; not restarting' >&2
+    return
+  fi
+  local after_rx=-1
+  after_rx="$(watchdog_rx)" || after_rx=-1
+  if [[ "$rx" != -1 && "$after_rx" -gt "$rx" ]]; then
+    rx="$after_rx"; failures=0; recovering=0; next_restart=0
+    watchdog_save healthy_rx
+    return
+  fi
+  failures=$((failures + 1))
+  if [[ "$failures" -ge 3 ]]; then recovering=1; fi
+  if [[ "$recovering" == 1 && "$now" -ge "$next_restart" ]]; then
+    # Agent revalidates this generation under relay.lock, including a concurrent manual stop.
+    next_restart=$((now + WATCHDOG_COOLDOWN))
+    last_restart="$now"
+    if timeout 20 "$AGENT_BIN" relay-recover "$intent"; then
+      watchdog_save recovering
+    else
+      watchdog_save restart_deferred
+    fi
+  else
+    watchdog_save "$([[ "$recovering" == 1 ]] && echo recovering || echo suspect)"
+  fi
+}
+
+watchdog_main() {
+  install -d -m 0755 "$WATCHDOG_DIR"
+  exec 8>"$WATCHDOG_DIR/watchdog.lock"
+  flock -n 8 || return 0
+  trap watchdog_cleanup EXIT
+  trap 'exit 0' TERM INT
+  watchdog_tick
+}
+
+[[ "${WATCHDOG_LIBRARY:-0}" == 1 ]] || watchdog_main

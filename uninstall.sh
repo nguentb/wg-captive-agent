@@ -119,6 +119,8 @@ remove_relay_rules() {
 stop_services() {
   if command -v systemctl >/dev/null 2>&1; then
     log "Stopping systemd services"
+    run systemctl disable --now wg-captive-watchdog.timer
+    run systemctl stop wg-captive-watchdog.service
     run systemctl disable --now wg-captive-agent.service
     run systemctl disable --now wg-captive-admin.service
     run systemctl disable --now wg-captive-redirect.service
@@ -137,11 +139,14 @@ remove_files() {
   rm -f /etc/systemd/system/wg-captive-relay-restore.service
   rm -f /etc/systemd/system/wg-captive-openvpn.service
   rm -f /etc/systemd/system/wg-captive-amneziawg.service
+  rm -f /etc/systemd/system/wg-captive-watchdog.service
+  rm -f /etc/systemd/system/wg-captive-watchdog.timer
   rm -f /etc/systemd/system/wg-captive-xray.service
   rm -f "$AGENT_BIN"
   rm -f /usr/local/sbin/wg-captive-redirect
   rm -f /usr/local/sbin/wg-captive-openvpn
   rm -f /usr/local/sbin/wg-captive-amneziawg
+  rm -f /usr/local/sbin/wg-captive-watchdog
   rm -f /usr/local/bin/wg-captive-install-amneziawg
   rm -f /usr/local/sbin/wg-captive-xray
   rm -f /usr/local/bin/wg-captive-xray-install
@@ -165,6 +170,7 @@ remove_files() {
   rm -f "${RELAY_AMNEZIAWG_CONF:-/etc/wg-captive-relay-awg.conf}"
   rm -f "${RELAY_XRAY_CONF:-/etc/wg-captive-relay-exit.json}"
   rm -f "$RELAY_ROUTE_FLAG"
+  rm -f "${RELAY_TUNNEL_FLAG:-/etc/wg-captive-relay-tunnel.state}"
   rm -f /etc/sysctl.d/99-wg-captive-relay.conf
   rm -f "$SSL_CONFIG_FILE"
   rm -f "$SSL_CF_CREDENTIALS_FILE"

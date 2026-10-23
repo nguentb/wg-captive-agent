@@ -1,0 +1,10 @@
+[Unit]
+Description=Check relay health every 30 seconds
+
+[Timer]
+OnBootSec=45
+OnUnitInactiveSec=30
+AccuracySec=1
+
+[Install]
+WantedBy=timers.target

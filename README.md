@@ -679,6 +679,45 @@ AWG van dung UDP: khong dam bao vuot chan IP hay chan toan bo UDP.
 Tai lieu upstream: [AWG-Go](https://github.com/amnezia-vpn/amneziawg-go),
 [AWG tools](https://github.com/amnezia-vpn/amneziawg-tools).
 
+## Watchdog WireGuard / AmneziaWG
+
+Installer bat `wg-captive-watchdog.timer`: moi 30 giay sau khi vong truoc hoan tat.
+Chi theo doi transport duoc chon va tunnel dang duoc yeu cau bat; OpenVPN giu
+supervisor rieng. Lan cap nhat dau tien tiep nhan tunnel WG/AWG dang chay, khong tu
+bat tunnel dang tat. Trang thai yeu cau tunnel luu trong
+`/etc/wg-captive-relay-tunnel.state` va chi thay doi qua agent/API.
+
+- RX tang so voi lan truoc: healthy, khong probe.
+- RX khong tang, bi reset, khong doc duoc, hoac mau dau tien: probe `1.1.1.1`.
+- Moi dich thu ICMP, roi TCP 443 neu ICMP that bai. Neu van loi, thu `8.8.8.8`
+  va `9.9.9.9` de xac minh truoc khi vao reconnect. Mot dich tra loi la du de
+  reset chuoi loi. Khi da reconnect, chi kiem tra RX va dich chinh `1.1.1.1`,
+  khong thu lai cac dich phu moi vong.
+- Ba vong lien tiep deu that bai: restart tunnel. Tiep tuc kiem tra va restart
+  lai khi van loi, cach nhau it nhat 30 giay (khong gioi han so lan). RX tang
+  hoac probe thanh cong se dung phuc hoi va reset chuoi loi.
+- Tat Tunnel/Relay tren web hoac agent se huy y dinh phuc hoi. Tat Route rieng
+  khong tat tunnel/watchdog. Khong dung `wg-quick down` ngoai agent neu muon
+  tat lau dai, vi watchdog van xem do la tunnel can phuc hoi.
+
+Probe chay trong netns cua wg-easy, bind IPv4 cua exit tunnel. Agent danh rieng
+IPv4 routing table **201**, rule priority **1999**, host routes toi ba IP qua exit
+va `prohibit default` de khong fallback ra WAN. Route probe duoc gan protocol 186,
+don sau moi vong va thu don lai khi vong truoc bi ngat dot ngot;
+neu table/priority da bi dich vu khac dung, watchdog bao `probe_setup_error` va
+khong restart. Khong sua captive, DNS hay policy table 200 cua client.
+TCP probe chi xac nhan ket noi TCP, khong kiem tra toan bo HTTPS/DNS/dich vu.
+Neu exit chan ca ICMP va TCP443 toi ca ba dich, watchdog co the phan doan sai;
+can cho phep it nhat mot dich. Khong suy ra ket noi tot chi tu handshake cu.
+
+Trang thai hien trong `relay-status`/web/API: `watchdog_state`, `watchdog_failures`,
+`watchdog_last_check`, `watchdog_last_restart` (Unix seconds). Xem log:
+
+```bash
+sudo journalctl -u wg-captive-watchdog -n 60 --no-pager
+sudo systemctl status wg-captive-watchdog.timer
+```
+
 ## Transport Tam Dung
 
 Xray tam thoi da duoc loai bo; Relay ho tro WireGuard UDP, OpenVPN TCP va AmneziaWG UDP.
