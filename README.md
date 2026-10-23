@@ -625,9 +625,63 @@ Script khong go cac package he thong nhu `nodejs`, `iptables`, `ipset`, `curl`, 
 - Web admin can quyen doc `WG_EASY_JSON` hoac docker exec vao `WG_EASY_CONTAINER`, ghi `EXPIRED_FILE`, `BACKUP_DIR` va chay `wg-captive-agent sync`.
 - Auto pop-up khong the dam bao 100% tren moi OS/thiet bi, nhung day la co che dung nhat khi khong can thiep router/client.
 
+## Relay AmneziaWG
+
+AmneziaWG la transport relay-to-exit thu ba. Router/client van ket noi WireGuard
+wg0 nhu cu. Moi lan chi chon mot transport; tat Route va Tunnel truoc khi doi.
+
+Sau khi cai/cap nhat agent, cai bo cong cu AWG mot lan tren **node relay**:
+
+```bash
+sudo wg-captive-install-amneziawg
+```
+
+Script build tu hai repo chinh thuc `amnezia-vpn/amneziawg-tools` va
+`amnezia-vpn/amneziawg-go`, ghim commit trong script. Ubuntu 24.04+ / Debian 12+
+can Internet toi GitHub va Go module proxy; Go 1.21+ bootstrap tu tai toolchain
+1.25 theo upstream. Build co the ton vai phut va RAM tam thoi. Binary nam rieng
+trong `/usr/local/lib/wg-captive-agent/amneziawg/bin`, khong ghi de bo AWG khac,
+khong cai DKMS/kernel module, khong sua image wg-easy. Updater khong build lai
+cong cu moi lan; chay lai lenh tren khi phien ban ghim thay doi.
+
+Tren **exit**, cai AmneziaWG va xuat **client profile `.conf`** tu Amnezia.
+Khong dung config WireGuard thuong hay file `vpn://`. Peer exit phai NAT/forward
+Internet, mo dung UDP port, va tham so obfuscation phai khop voi server.
+
+Tren web: **Relay > AmneziaWG UDP > Import .conf > Use this tunnel**, sau do bat
+Tunnel va Route. Moi profile duoc luu rieng va di kem backup/restore. CLI:
+
+```bash
+sudo wg-captive-agent relay-disable
+sudo wg-captive-agent relay-select amneziawg
+sudo wg-captive-agent relay-enable
+sudo wg-captive-agent relay-status
+sudo journalctl -u wg-captive-amneziawg -n 60 --no-pager
+```
+
+Service chay `awg-quick` trong network namespace cua wg-easy bang cong cu tren
+host, dung interface `awg-exit`. Neu kernel da co module AWG, awg-quick dung module;
+neu khong thi fallback sang `amneziawg-go`. Service theo doi container restart va
+khoi dong lai, ap lai route khi da co interface. **Tunnel ready chi xac nhan
+interface/IP**, khong dam bao exit da handshake; xem `latest handshake` va
+`transfer` trong status, roi test luu luong tu client.
+
+Importer ho tro Jc/Jmin/Jmax, S1-S4, H1-H4 (ca range), I1-I5 va cac option AWG3
+HeaderProtectionKey, ContentPaddingAddition, timer ranges, RandomTrailers,
+DisableCookies, AdvancedSecurity theo bo tools ghim; giu nguyen key va
+obfuscation, tu them keepalive 25 neu chua co. Option khong ho tro bi tu choi,
+khong am tham bo qua. Chi nhan mot exit peer, IPv4 address va AllowedIPs co
+`0.0.0.0/0`. DNS, hook script, SaveConfig bi bo, Table ep thanh off. Agent tiep tuc
+giu DNS UDP/TCP 53 va TCP 853 tai relay, captive/expired va block IP nhu cu;
+khong doi default route/resolver cua VPS. Routing client hien tai chi ap dung IPv4.
+
+AWG van dung UDP: khong dam bao vuot chan IP hay chan toan bo UDP.
+Tai lieu upstream: [AWG-Go](https://github.com/amnezia-vpn/amneziawg-go),
+[AWG tools](https://github.com/amnezia-vpn/amneziawg-tools).
+
 ## Transport Tam Dung
 
-Xray tam thoi da duoc loai bo; Relay chi con WireGuard UDP va OpenVPN TCP.
+Xray tam thoi da duoc loai bo; Relay ho tro WireGuard UDP, OpenVPN TCP va AmneziaWG UDP.
 Installer dung service va go route Xray cu truoc khi thay binary agent. Neu Xray
 dang duoc chon, relay duoc dua ve WireGuard o trang thai tat; khong tu bat tunnel.
 Profile cu trong SQLite va file JSON duoc giu lai, khong con duoc nap/chay. Backup

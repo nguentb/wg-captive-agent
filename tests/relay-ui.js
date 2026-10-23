@@ -6,12 +6,14 @@ const os = require("node:os");
 const path = require("node:path");
 const http = require("node:http");
 const { adminFixture, ovpn } = require("./relay.test");
+const { awg } = require("./amneziawg.test");
 const preview = process.argv.includes("--preview");
 
 async function main() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "captive-relay-ui-"));
   const { api } = adminFixture(directory);
   await api.importRelayConf(api.loadConfig(), ovpn, "openvpn");
+  await api.importRelayConf(api.loadConfig(), awg, "amneziawg");
   let relay = api.relayStatus(api.loadConfig());
   const profiles = JSON.parse(JSON.stringify(relay.profiles));
   const errors = [];
@@ -69,6 +71,18 @@ async function main() {
     page.on("pageerror", (error) => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.getByRole("button", { name: "Relay", exact: true }).click();
+    await page.getByRole("tab", { name: "AmneziaWG UDP" }).click();
+    await page.getByRole("button", { name: "Use this tunnel" }).click();
+    await page.waitForFunction(() => document.querySelector("#relaySelectBtn").textContent === "Selected");
+    assert.equal(await page.locator("#relayTunnelLabel").textContent(), "awg-exit / UDP");
+    assert.equal(await page.locator("#relayLogsBtn").textContent(), "AmneziaWG logs");
+    assert.equal(await page.locator("#relayImportBtn").textContent(), "Import .conf");
+    await page.locator("label:has(#RELAY_MASTER)").click();
+    await page.waitForFunction(() => document.querySelector("#RELAY_ROUTE").checked);
+    await page.getByRole("tab", { name: "WireGuard UDP" }).click();
+    assert.equal(await page.locator("#relaySelectBtn").isDisabled(), true);
+    await page.locator("label:has(#RELAY_MASTER)").click();
+    await page.waitForFunction(() => !document.querySelector("#relaySelectBtn").disabled);
     await page.getByRole("tab", { name: "OpenVPN TCP" }).click();
     await page.getByRole("button", { name: "Use this tunnel" }).click();
     await page.waitForFunction(() => document.querySelector("#relaySelectBtn").textContent === "Selected");
@@ -92,7 +106,9 @@ async function main() {
     relay.tunnel_running = false;
     await page.locator("#relayRefreshBtn").click();
     await page.waitForFunction(() => document.querySelector("#relayActiveLabel").textContent.includes("Stopped"));
-    await page.getByRole("tab", { name: "OpenVPN TCP" }).click();
+    await page.getByRole("tab", { name: "AmneziaWG UDP" }).click();
+    await page.getByRole("button", { name: "Use this tunnel" }).click();
+    await page.waitForFunction(() => document.querySelector("#relaySelectBtn").textContent === "Selected");
     fs.mkdirSync(path.resolve(".artifacts"), { recursive: true });
     await page.screenshot({ path: path.resolve(".artifacts/relay-desktop.png"), fullPage: true, animations: "disabled" });
     await page.setViewportSize({ width: 390, height: 844 });

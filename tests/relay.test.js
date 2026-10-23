@@ -78,7 +78,7 @@ function adminFixture(directory) {
   const tcpPath = path.join(directory, "exit.ovpn");
   const agentBin = path.join(directory, "mock-agent");
   fs.writeFileSync(agentBin, "");
-  fs.writeFileSync(configFile, `STATE_DB=${dbPath}\nRELAY_EXIT_CONF=${wgPath}\nRELAY_OPENVPN_CONF=${tcpPath}\nEXPIRED_FILE=${path.join(directory, "expired.txt")}\nBACKUP_DIR=${path.join(directory, "backup")}\n`);
+  fs.writeFileSync(configFile, `STATE_DB=${dbPath}\nRELAY_EXIT_CONF=${wgPath}\nRELAY_OPENVPN_CONF=${tcpPath}\nRELAY_AMNEZIAWG_CONF=${path.join(directory, "awg.conf")}\nEXPIRED_FILE=${path.join(directory, "expired.txt")}\nBACKUP_DIR=${path.join(directory, "backup")}\n`);
   const oldDb = new DatabaseSync(dbPath);
   oldDb.exec(`CREATE TABLE relay_config(id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0, exit_if TEXT NOT NULL DEFAULT 'wg-exit', client_subnet TEXT NOT NULL DEFAULT '10.8.0.0/24', route_table INTEGER NOT NULL DEFAULT 200, exit_conf_path TEXT, exit_conf TEXT, imported_at TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`);
   oldDb.prepare("INSERT INTO relay_config(id,exit_conf_path,exit_conf) VALUES(1,?,?)").run(wgPath, wg);

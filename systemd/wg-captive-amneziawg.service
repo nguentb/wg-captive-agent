@@ -1,0 +1,19 @@
+[Unit]
+Description=Captive relay AmneziaWG tunnel
+After=network-online.target docker.service wg-captive-admin.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/wg-captive-amneziawg
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=5
+KillMode=control-group
+RuntimeDirectory=wg-captive-amneziawg
+RuntimeDirectoryMode=0700
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

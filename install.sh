@@ -9,7 +9,8 @@ AUTO_SELECT_FAMILY="$(node -p 'require("node:net").getDefaultAutoSelectFamily() 
 node --check web/wg-captive-admin.js
 node --check web/relay-config.js
 node --check web/openvpn-state.js
-for script in bin/wg-captive-agent bin/wg-captive-redirect bin/wg-captive-openvpn scripts/remove-legacy-xray.sh; do
+node --check web/amnezia-config.js
+for script in bin/wg-captive-agent bin/wg-captive-redirect bin/wg-captive-openvpn bin/wg-captive-amneziawg scripts/install-amneziawg.sh scripts/remove-legacy-xray.sh; do
   bash -n "$script"
 done
 
@@ -59,6 +60,8 @@ bash scripts/remove-legacy-xray.sh
 install -m 0755 bin/wg-captive-agent /usr/local/sbin/wg-captive-agent
 install -m 0755 bin/wg-captive-redirect /usr/local/sbin/wg-captive-redirect
 install -m 0755 bin/wg-captive-openvpn /usr/local/sbin/wg-captive-openvpn
+install -m 0755 bin/wg-captive-amneziawg /usr/local/sbin/wg-captive-amneziawg
+install -m 0755 scripts/install-amneziawg.sh /usr/local/bin/wg-captive-install-amneziawg
 install -m 0755 scripts/wg-captive-update /usr/local/bin/wg-captive-update
 install -m 0755 scripts/wg-captive-ssl-cloudflare /usr/local/bin/wg-captive-ssl-cloudflare
 install -m 0755 scripts/wg-captive-ssl-remove /usr/local/bin/wg-captive-ssl-remove
@@ -71,6 +74,7 @@ install -d -m 0755 /var/lib/wg-captive-agent
 install -m 0755 web/wg-captive-admin.js /usr/local/lib/wg-captive-agent/wg-captive-admin.js
 install -m 0644 web/relay-config.js /usr/local/lib/wg-captive-agent/relay-config.js
 install -m 0644 web/openvpn-state.js /usr/local/lib/wg-captive-agent/openvpn-state.js
+install -m 0644 web/amnezia-config.js /usr/local/lib/wg-captive-agent/amnezia-config.js
 
 if [[ ! -f /etc/wg-captive-expired.txt ]]; then
   install -m 0644 examples/wg-captive-expired.txt /etc/wg-captive-expired.txt
@@ -81,6 +85,7 @@ install -m 0644 systemd/wg-captive-admin.service /etc/systemd/system/wg-captive-
 install -m 0644 systemd/wg-captive-redirect.service /etc/systemd/system/wg-captive-redirect.service
 install -m 0644 systemd/wg-captive-relay-restore.service /etc/systemd/system/wg-captive-relay-restore.service
 install -m 0644 systemd/wg-captive-openvpn.service /etc/systemd/system/wg-captive-openvpn.service
+install -m 0644 systemd/wg-captive-amneziawg.service /etc/systemd/system/wg-captive-amneziawg.service
 
 systemctl daemon-reload
 

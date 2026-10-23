@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="/usr/local/lib/wg-captive-agent/amneziawg/bin:$PATH"
 
 CONFIG_FILE="${CONFIG_FILE:-/etc/wg-captive-agent.env}"
 
@@ -31,6 +32,7 @@ RELAY_EXIT_CONF="${RELAY_EXIT_CONF:-/etc/wg-captive-relay-exit.conf}"
 RELAY_ROUTE_FLAG="${RELAY_ROUTE_FLAG:-/etc/wg-captive-relay.enabled}"
 RELAY_PROTOCOL="wireguard"
 RELAY_OPENVPN_CONF="${RELAY_OPENVPN_CONF:-/etc/wg-captive-relay-exit.ovpn}"
+RELAY_AMNEZIAWG_CONF="${RELAY_AMNEZIAWG_CONF:-/etc/wg-captive-relay-awg.conf}"
 OPENVPN_RUNTIME_DIR="${OPENVPN_RUNTIME_DIR:-/run/wg-captive-openvpn}"
 OPENVPN_STATE_HELPER="${OPENVPN_STATE_HELPER:-/usr/local/lib/wg-captive-agent/openvpn-state.js}"
 RELAY_WG_EXIT_IF="$RELAY_EXIT_IF"
@@ -94,9 +96,13 @@ db_load_runtime_config() {
   RELAY_WG_EXIT_IF="$RELAY_EXIT_IF"
   value="$(db_scalar "SELECT protocol FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_PROTOCOL="$value"
   value="$(db_scalar "SELECT openvpn_conf_path FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_OPENVPN_CONF="$value"
+  value="$(db_scalar "SELECT amneziawg_conf_path FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_AMNEZIAWG_CONF="$value"
   if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
     RELAY_EXIT_IF="tun-exit"
     RELAY_EXIT_CONF="$RELAY_OPENVPN_CONF"
+  elif [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
+    RELAY_EXIT_IF="awg-exit"
+    RELAY_EXIT_CONF="$RELAY_AMNEZIAWG_CONF"
   fi
 }
 
@@ -105,6 +111,7 @@ db_write_relay_conf() {
   command -v sqlite3 >/dev/null 2>&1 || return 0
   local content column=exit_conf
   [[ "$RELAY_PROTOCOL" == "openvpn" ]] && column=openvpn_conf
+  [[ "$RELAY_PROTOCOL" == "amneziawg" ]] && column=amneziawg_conf
   content="$(sqlite3 -noheader "$STATE_DB" "SELECT $column FROM relay_config WHERE id=1;" 2>/dev/null || true)"
   if [[ -n "$content" && ! -f "$RELAY_EXIT_CONF" ]]; then
     install -d -m 0755 "$(dirname "$RELAY_EXIT_CONF")"
@@ -118,7 +125,9 @@ db_set_relay_enabled() {
 }
 
 db_clear_relay_conf() {
-  if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
+  if [[ "$RELAY_PROTOCOL" == "amneziawg" ]]; then
+    db_exec "UPDATE relay_config SET enabled=0, amneziawg_conf=NULL, amneziawg_imported_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=1;"
+  elif [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
     db_exec "UPDATE relay_config SET enabled=0, openvpn_conf=NULL, openvpn_imported_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=1;"
   else
     db_exec "UPDATE relay_config SET enabled=0, exit_conf=NULL, imported_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=1;"
@@ -134,7 +143,7 @@ NETNS_PID=""
 
 usage() {
   cat <<'EOF'
-Usage: wg-captive-agent [run|sync|cleanup|status|relay-enable|relay-disable|relay-delete-config|relay-on|relay-off|relay-status|relay-tunnel-up|relay-tunnel-down|relay-restart|relay-restore|relay-select wireguard|relay-select openvpn]
+Usage: wg-captive-agent [run|sync|cleanup|status|relay-enable|relay-disable|relay-delete-config|relay-on|relay-off|relay-status|relay-tunnel-up|relay-tunnel-down|relay-restart|relay-restore|relay-select wireguard|relay-select openvpn|relay-select amneziawg]
 
 Commands:
   run      Sync expired peers in a loop and keep firewall rules installed.
@@ -328,7 +337,10 @@ iptables -t mangle -A '$RELAY_MARK_CHAIN' -j MARK --set-mark '$RELAY_MARK'
 }
 
 relay_tunnel_ready() {
-  if [[ "$RELAY_PROTOCOL" == openvpn ]]; then
+  if [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
+    systemctl is-active --quiet wg-captive-amneziawg.service || return 1
+    relay_exec "ip -4 addr show dev awg-exit 2>/dev/null | grep -q 'inet '"
+  elif [[ "$RELAY_PROTOCOL" == openvpn ]]; then
     systemctl is-active --quiet wg-captive-openvpn.service || return 1
     relay_exec "ip -4 addr show dev tun-exit 2>/dev/null | grep -q 'inet '" || return 1
     node "$OPENVPN_STATE_HELPER" ready "$OPENVPN_RUNTIME_DIR/management.sock"
@@ -338,7 +350,15 @@ relay_tunnel_ready() {
 }
 
 relay_tunnel_up() {
-  [[ "$RELAY_PROTOCOL" == wireguard || "$RELAY_PROTOCOL" == openvpn ]] || die "selected transport is no longer supported; run the installer to migrate"
+  [[ "$RELAY_PROTOCOL" == wireguard || "$RELAY_PROTOCOL" == openvpn || "$RELAY_PROTOCOL" == amneziawg ]] || die "selected transport is no longer supported; run the installer to migrate"
+  if [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
+    db_write_relay_conf
+    [[ -s "$RELAY_EXIT_CONF" ]] || die "import AmneziaWG config first"
+    command -v awg >/dev/null && command -v awg-quick >/dev/null && command -v amneziawg-go >/dev/null || die "AmneziaWG tools missing; run wg-captive-install-amneziawg"
+    systemctl start wg-captive-amneziawg.service
+    echo "relay_tunnel: starting AmneziaWG (check status and latest handshake)"
+    return
+  fi
   if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
     db_write_relay_conf
     [[ -s "$RELAY_EXIT_CONF" ]] || die "import OpenVPN TCP config first"
@@ -358,6 +378,11 @@ relay_tunnel_up() {
 }
 
 relay_tunnel_down() {
+  if [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
+    systemctl stop wg-captive-amneziawg.service
+    echo "relay_tunnel: down"
+    return
+  fi
   if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
     systemctl stop wg-captive-openvpn.service
     echo "relay_tunnel: down"
@@ -391,12 +416,16 @@ relay_route_on() {
   local allow_start="${1:-yes}"
   db_write_relay_conf
   [[ -f "$RELAY_EXIT_CONF" ]] || die "import relay exit config before enabling route"
-  if [[ "$RELAY_PROTOCOL" == openvpn ]] && ! relay_tunnel_ready; then
+  if [[ "$RELAY_PROTOCOL" == openvpn || "$RELAY_PROTOCOL" == amneziawg ]] && ! relay_tunnel_ready; then
     [[ "$allow_start" == yes ]] || return 75
     relay_tunnel_up
     touch "$RELAY_ROUTE_FLAG"
     db_set_relay_enabled 1
-    echo "relay_route: pending OpenVPN connection; cancel with relay-off"
+    if [[ "$RELAY_PROTOCOL" == openvpn ]]; then
+      echo "relay_route: pending OpenVPN connection; cancel with relay-off"
+    else
+      echo "relay_route: pending AmneziaWG tunnel; cancel with relay-off"
+    fi
     return
   fi
   relay_ensure_forward
@@ -449,20 +478,20 @@ relay_restore() {
 
 relay_reapply() {
   # Re-check intent under relay.lock: a queued reconnect must not undo a manual stop.
-  [[ "$RELAY_PROTOCOL" == openvpn && -f "$RELAY_ROUTE_FLAG" ]] || return 0
+  [[ ( "$RELAY_PROTOCOL" == openvpn || "$RELAY_PROTOCOL" == amneziawg ) && -f "$RELAY_ROUTE_FLAG" ]] || return 0
   relay_tunnel_ready || return 75
   relay_route_on no
 }
 
 relay_select() {
   local protocol="${1:-}"
-  [[ "$protocol" == "wireguard" || "$protocol" == "openvpn" ]] || die "protocol must be wireguard or openvpn"
+  [[ "$protocol" == "wireguard" || "$protocol" == "openvpn" || "$protocol" == amneziawg ]] || die "protocol must be wireguard, openvpn or amneziawg"
   [[ "$protocol" == "$RELAY_PROTOCOL" ]] && return 0
   [[ ! -f "$RELAY_ROUTE_FLAG" ]] || die "stop relay route and tunnel before switching protocol"
   if relay_exec "ip rule show | grep -Eq 'fwmark $RELAY_MARK lookup $RELAY_ROUTE_TABLE|from $RELAY_CLIENT_SUBNET lookup $RELAY_ROUTE_TABLE'"; then
     die "stop relay route before switching protocol"
   fi
-  if relay_exec "ip link show '$RELAY_WG_EXIT_IF' >/dev/null 2>&1 || ip link show tun-exit >/dev/null 2>&1" || systemctl is-active --quiet wg-captive-openvpn.service; then
+  if relay_exec "ip link show '$RELAY_WG_EXIT_IF' >/dev/null 2>&1 || ip link show tun-exit >/dev/null 2>&1 || ip link show awg-exit >/dev/null 2>&1" || systemctl is-active --quiet wg-captive-openvpn.service || systemctl is-active --quiet wg-captive-amneziawg.service; then
     die "stop relay route and tunnel before switching protocol"
   fi
   [[ -f "$STATE_DB" ]] || die "SQLite database is required"
@@ -488,6 +517,9 @@ relay_delete_config() {
     tunnel_on=1
   fi
   if [[ "$RELAY_PROTOCOL" == "openvpn" ]] && systemctl is-active --quiet wg-captive-openvpn.service; then
+    tunnel_on=1
+  fi
+  if [[ "$RELAY_PROTOCOL" == amneziawg ]] && systemctl is-active --quiet wg-captive-amneziawg.service; then
     tunnel_on=1
   fi
 
@@ -520,6 +552,11 @@ relay_status() {
   echo "relay_exit_if: $RELAY_EXIT_IF"
   echo "relay_client_subnet: $RELAY_CLIENT_SUBNET"
   echo "relay_route_table: $RELAY_ROUTE_TABLE"
+  if [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
+    echo "amneziawg_service: $(systemctl is-active wg-captive-amneziawg.service 2>/dev/null || true)"
+    echo "amneziawg_tools: $(command -v awg >/dev/null && command -v awg-quick >/dev/null && command -v amneziawg-go >/dev/null && echo installed || echo missing)"
+    relay_exec "awg show awg-exit 2>/dev/null || true"
+  fi
   if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
     echo "openvpn_service: $(systemctl is-active wg-captive-openvpn.service 2>/dev/null || true)"
     if relay_exec "ip -4 addr show dev tun-exit 2>/dev/null | grep -q 'inet '"; then

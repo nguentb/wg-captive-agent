@@ -89,6 +89,30 @@ touch "$RELAY_ROUTE_FLAG"
 if relay_reapply; then echo 'route reapply missed disappearing interface' >&2; exit 1; fi
 [[ "$(grep -cF 'systemctl start wg-captive-openvpn.service' "$log")" == "$starts" ]]
 link_exists=1
+RELAY_PROTOCOL=amneziawg
+RELAY_EXIT_IF=awg-exit
+awg() { :; }
+awg-quick() { :; }
+amneziawg-go() { :; }
+service_active=0
+relay_route_on > "$test_dir/awg-pending.log"
+grep -qF 'pending AmneziaWG tunnel' "$test_dir/awg-pending.log"
+grep -qF 'systemctl start wg-captive-amneziawg.service' "$log"
+[[ -f "$RELAY_ROUTE_FLAG" ]]
+relay_reapply >/dev/null
+grep -qF "ip route add default dev 'awg-exit'" "$log"
+grep -qF -- "-o 'awg-exit' -j MASQUERADE" "$log"
+grep -qF -- '-p tcp --dport 53 -j RETURN' "$log"
+grep -qF -- '-p tcp --dport 853 -j RETURN' "$log"
+relay_route_off >/dev/null
+relay_tunnel_down >/dev/null
+grep -qF 'systemctl stop wg-captive-amneziawg.service' "$log"
+rm -f "$RELAY_ROUTE_FLAG"
+relay_reapply
+[[ ! -f "$RELAY_ROUTE_FLAG" ]]
+RELAY_PROTOCOL=openvpn
+RELAY_EXIT_IF=tun-exit
+service_active=1
 relay_route_on() { printf 'route reapplied\n' >> "$log"; }
 tcp_ready=1
 rm -f "$RELAY_ROUTE_FLAG"

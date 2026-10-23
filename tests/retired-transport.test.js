@@ -21,7 +21,7 @@ test("retired transport migrates disabled, preserves archived config and cannot 
     assert.equal(row.enabled, 0);
     assert.equal(row.exit_conf, wg);
     assert.equal(row.xray_conf, "archived-profile");
-    assert.deepEqual(Object.keys(fixture.api.relayStatus(config).profiles), ["wireguard", "openvpn"]);
+    assert.deepEqual(Object.keys(fixture.api.relayStatus(config).profiles), ["wireguard", "openvpn", "amneziawg"]);
     assert.doesNotMatch(fixture.api.appPage(), /xray/i);
     assert.doesNotThrow(() => new (require("node:vm").Script)(fixture.api.clientJs()));
     assert.throws(() => relayProtocol("xray"), /Invalid/);

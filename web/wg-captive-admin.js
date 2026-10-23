@@ -9,7 +9,7 @@ const path = require("path");
 const { execFile, execFileSync } = require("child_process");
 const crypto = require("crypto");
 const dns = require("dns").promises;
-const { relayProtocol, normalizeOpenVpnConfig } = require("./relay-config");
+const { relayProtocol, normalizeOpenVpnConfig, normalizeAmneziaConfig } = require("./relay-config");
 
 const CONFIG_FILE = process.env.CONFIG_FILE || "/etc/wg-captive-agent.env";
 const HOST = process.env.ADMIN_HOST || "0.0.0.0";
@@ -164,8 +164,12 @@ INSERT OR IGNORE INTO relay_config(id) VALUES(1);
   if (newOpenVpnPath && config.RELAY_OPENVPN_CONF) sqliteRaw(config, `UPDATE relay_config SET openvpn_conf_path=${sqlQuote(config.RELAY_OPENVPN_CONF)} WHERE id=1`);
   ensureDbColumn(config, "relay_config", "openvpn_conf", "TEXT");
   ensureDbColumn(config, "relay_config", "openvpn_imported_at", "TEXT");
+  const newAwgPath = ensureDbColumn(config, "relay_config", "amneziawg_conf_path", "TEXT NOT NULL DEFAULT '/etc/wg-captive-relay-awg.conf'");
+  if (newAwgPath && config.RELAY_AMNEZIAWG_CONF) sqliteRaw(config, `UPDATE relay_config SET amneziawg_conf_path=${sqlQuote(config.RELAY_AMNEZIAWG_CONF)} WHERE id=1`);
+  ensureDbColumn(config, "relay_config", "amneziawg_conf", "TEXT");
+  ensureDbColumn(config, "relay_config", "amneziawg_imported_at", "TEXT");
   // Preserve retired profile columns in old databases, but never activate them.
-  sqliteRaw(config, "UPDATE relay_config SET protocol='wireguard', enabled=0 WHERE protocol NOT IN ('wireguard','openvpn')");
+  sqliteRaw(config, "UPDATE relay_config SET protocol='wireguard', enabled=0 WHERE protocol NOT IN ('wireguard','openvpn','amneziawg')");
   fs.chmodSync(db, 0o600);
   dbInitPath = db;
 }
@@ -214,7 +218,7 @@ function dbDeleteExpiredRedirectTokens(config) {
 
 function dbGetRelayConfig(config) {
   if (!dbAvailable(config)) return {};
-  const rows = sqliteRows(config, "SELECT enabled, exit_if, client_subnet, route_table, exit_conf_path, imported_at, protocol, openvpn_conf_path FROM relay_config WHERE id = 1");
+  const rows = sqliteRows(config, "SELECT enabled, exit_if, client_subnet, route_table, exit_conf_path, imported_at, protocol, openvpn_conf_path, amneziawg_conf_path FROM relay_config WHERE id = 1");
   return rows[0] || {};
 }
 
@@ -277,6 +281,7 @@ function loadConfig() {
       config.RELAY_UPDATED_AT = relay.imported_at || "";
       config.RELAY_PROTOCOL = relay.protocol || "wireguard";
       config.RELAY_OPENVPN_CONF = relay.openvpn_conf_path || "/etc/wg-captive-relay-exit.ovpn";
+      config.RELAY_AMNEZIAWG_CONF = relay.amneziawg_conf_path || "/etc/wg-captive-relay-awg.conf";
     }
   } catch {}
   if (!config.PORTAL_URL && config.PORTAL_IP) config.PORTAL_URL = `http://${config.PORTAL_IP}`;
@@ -371,7 +376,10 @@ function wgEasyContainerJson(config) { return config.WG_EASY_CONTAINER_JSON || "
 function wgEasyConfPath(config) { return config.WG_EASY_CONF || "/etc/wireguard/wg0.conf"; }
 function wgEasyContainerConf(config) { return config.WG_EASY_CONTAINER_CONF || "/etc/wireguard/wg0.conf"; }
 function backupDirPath(config) { return config.BACKUP_DIR || "/var/backups/wg-captive"; }
-function relayConfPath(config, protocol = "wireguard") { return protocol === "openvpn" ? (config.RELAY_OPENVPN_CONF || "/etc/wg-captive-relay-exit.ovpn") : (config.RELAY_EXIT_CONF || "/etc/wg-captive-relay-exit.conf"); }
+function relayConfPath(config, protocol = "wireguard") {
+  if (protocol === "amneziawg") return config.RELAY_AMNEZIAWG_CONF || "/etc/wg-captive-relay-awg.conf";
+  return protocol === "openvpn" ? (config.RELAY_OPENVPN_CONF || "/etc/wg-captive-relay-exit.ovpn") : (config.RELAY_EXIT_CONF || "/etc/wg-captive-relay-exit.conf");
+}
 
 function compareIp(a, b) {
   const aa = a.split(".").map(Number);
@@ -797,8 +805,8 @@ async function restoreBackup(config, archiveBuffer) {
   initDb(config);
   const restoredConfig = loadConfig();
   const relay = dbRelayFull(restoredConfig);
-  for (const protocol of ["wireguard", "openvpn"]) {
-    const content = protocol === "openvpn" ? relay?.openvpn_conf : relay?.exit_conf;
+  for (const protocol of ["wireguard", "openvpn", "amneziawg"]) {
+    const content = relay?.[protocol === "wireguard" ? "exit_conf" : `${protocol}_conf`];
     const file = relayConfPath(restoredConfig, protocol);
     if (content) saveRelayConfigFile(restoredConfig, content, protocol);
     else if (fs.existsSync(file)) fs.unlinkSync(file);
@@ -857,8 +865,8 @@ function saveRelayConfigFile(config, content, protocol = "wireguard") {
 
 function dbSetRelayExitConfig(config, file, content, protocol = "wireguard") {
   if (!dbAvailable(config)) return false;
-  const prefix = protocol === "openvpn" ? "openvpn" : "exit";
-  const timestampColumn = protocol === "openvpn" ? "openvpn_imported_at" : "imported_at";
+  const prefix = protocol === "wireguard" ? "exit" : protocol;
+  const timestampColumn = protocol === "wireguard" ? "imported_at" : `${protocol}_imported_at`;
   sqliteRaw(config, `UPDATE relay_config SET ${prefix}_conf_path=${sqlQuote(file)}, ${prefix}_conf=${sqlQuote(content)}, ${timestampColumn}=${sqlQuote(new Date().toISOString())}, updated_at=CURRENT_TIMESTAMP WHERE id=1`);
   return true;
 }
@@ -867,14 +875,14 @@ function relayStatus(config) {
   const relay = dbRelayFull(config);
   const protocol = relayProtocol(relay?.protocol || "wireguard");
   const profiles = {};
-  for (const type of ["wireguard", "openvpn"]) {
+  for (const type of ["wireguard", "openvpn", "amneziawg"]) {
     const file = relayConfPath(config, type);
-    let content = (type === "openvpn" ? relay?.openvpn_conf : relay?.exit_conf) || "";
+    let content = relay?.[type === "wireguard" ? "exit_conf" : `${type}_conf`] || "";
     try {
       if (!content && fs.existsSync(file)) content = fs.readFileSync(file, "utf8");
       if (content && !fs.existsSync(file)) saveRelayConfigFile(config, content, type);
     } catch {}
-    profiles[type] = { protocol: type, conf_path: file, imported: Boolean(content), exit_config: content, updated_at: (type === "openvpn" ? relay?.openvpn_imported_at : relay?.imported_at) || "" };
+    profiles[type] = { protocol: type, conf_path: file, imported: Boolean(content), exit_config: content, updated_at: relay?.[type === "wireguard" ? "imported_at" : `${type}_imported_at`] || "" };
   }
   let status = "";
   try {
@@ -884,7 +892,7 @@ function relayStatus(config) {
   }
   const tunnelUp = /^tunnel:\s*UP/im.test(status);
   const routeEnabled = /^route:\s*ENABLED/im.test(status);
-  const tunnelRunning = tunnelUp || /^openvpn_service:\s*(active|activating)/im.test(status);
+  const tunnelRunning = tunnelUp || /^(?:openvpn|amneziawg)_service:\s*(active|activating)/im.test(status);
   return { ...profiles[protocol], protocol, profiles, enabled: routeEnabled, route_enabled: routeEnabled, route_requested: /^route_requested:\s*yes/im.test(status), openvpn_state: status.match(/^openvpn_connection:\s*(\S+)/im)?.[1] || "", tunnel_up: tunnelUp, tunnel_running: tunnelRunning, status };
 }
 
@@ -914,7 +922,7 @@ async function importRelayConf(config, content, protocol = "wireguard") {
   relayProtocol(protocol);
   const current = relayStatus(config);
   if (current.protocol === protocol && (current.tunnel_running || current.route_enabled)) throw new Error("Stop this tunnel and route before replacing its config");
-  const text = protocol === "openvpn" ? normalizeOpenVpnConfig(content) : normalizeWireGuardConfig(content);
+  const text = protocol === "openvpn" ? normalizeOpenVpnConfig(content) : protocol === "amneziawg" ? normalizeAmneziaConfig(content) : normalizeWireGuardConfig(content);
   if (protocol === "wireguard" && (!text || !/^\s*\[Interface\]/m.test(text) || !/^\s*\[Peer\]/m.test(text))) throw new Error("Invalid WireGuard .conf file");
   const file = saveRelayConfigFile(config, text, protocol);
   dbSetRelayExitConfig(config, file, text, protocol);
@@ -1010,7 +1018,7 @@ function relayPanel() {
   return `<section id="relayTab" class="settings hidden">
 <style>.relay-protocols{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:18px;padding-bottom:8px}.relay-protocols button{border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);padding:10px 16px;font:inherit;font-weight:750;cursor:pointer}.relay-protocols button.active{border-color:#20c76a;color:#f8fafc}.relay-profile-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}.relay-profile-head strong{font-size:18px}.relay-profile-head span{color:var(--muted);font-size:13px}.relay-profile-meta{display:grid;gap:5px}.relay-select-btn{max-width:100%;white-space:normal}.relay-import{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.relay-import input{min-width:0;max-width:100%;flex:1 1 200px}.relay-import button{flex:0 0 auto}.relay-status-grid pre{overflow-wrap:anywhere}button:disabled{opacity:.5;cursor:not-allowed}@media(max-width:500px){.relay-op-row{flex-wrap:wrap;gap:12px}.relay-op-actions{margin-left:auto}.relay-protocols button{padding:10px}.relay-import button{flex:1 1 auto}}</style>
 <div class="section-head"><div><div class="relay-title-line"><h1>Relay</h1><label class="switch relay-master-switch" title="Toggle relay"><input type="checkbox" id="RELAY_MASTER"><span class="slider"></span></label></div><p id="relayActiveLabel"></p></div></div>
-<div class="relay-protocols" role="tablist" aria-label="Tunnel protocol"><button type="button" role="tab" data-relay-protocol="wireguard">WireGuard UDP</button><button type="button" role="tab" data-relay-protocol="openvpn">OpenVPN TCP</button></div>
+<div class="relay-protocols" role="tablist" aria-label="Tunnel protocol"><button type="button" role="tab" data-relay-protocol="wireguard">WireGuard UDP</button><button type="button" role="tab" data-relay-protocol="openvpn">OpenVPN TCP</button><button type="button" role="tab" data-relay-protocol="amneziawg">AmneziaWG UDP</button></div>
 <div class="relay-profile-head"><div class="relay-profile-meta"><strong id="relayProfileTitle"></strong><span id="relayProfileState"></span></div><button type="button" id="relaySelectBtn" class="ghost relay-select-btn">Use this tunnel</button></div>
 <div class="backup-panel"><form id="relayImportForm" class="relay-import" enctype="multipart/form-data"><input type="file" id="relayConfFile" name="relayConf" accept=".conf,text/plain"><button type="submit" class="ghost" id="relayImportBtn">Import .conf</button><button type="button" id="relayDeleteConfigBtn" class="ghost danger">Delete config</button></form></div>
 <div class="relay-ops"><div class="relay-op-row"><div><strong>Tunnel</strong><span id="relayTunnelLabel"></span></div><div class="relay-op-actions"><button class="ghost relay-action" data-action="relay-restart">Restart</button><label class="switch relay-switch" title="Toggle tunnel"><input type="checkbox" id="RELAY_TUNNEL"><span class="slider"></span></label></div></div><div class="relay-op-row"><div><strong>Route</strong></div><label class="switch relay-switch" title="Toggle route"><input type="checkbox" id="RELAY_ROUTE"><span class="slider"></span></label></div></div>
@@ -1072,20 +1080,21 @@ let relayView='';let relayBusy=false;
 function renderRelay(){
   const busy=relayBusy;
   const relay=state.relay||{};const selected=relay.protocol||'wireguard';const running=relay.tunnel_running||relay.tunnel_up;if(!relayView)relayView=selected;
-  const profile=relay.profiles?.[relayView]||{};const current=relayView===selected;const name=relayView==='openvpn'?'OpenVPN TCP':'WireGuard UDP';
+  const names={wireguard:'WireGuard UDP',openvpn:'OpenVPN TCP',amneziawg:'AmneziaWG UDP'};const profile=relay.profiles?.[relayView]||{};const current=relayView===selected;const name=names[relayView];
   document.querySelectorAll('[data-relay-protocol]').forEach((btn)=>{const active=btn.dataset.relayProtocol===relayView;btn.classList.toggle('active',active);btn.setAttribute('aria-selected',String(active));btn.disabled=busy});
-  $('relayActiveLabel').textContent=(selected==='openvpn'?'OpenVPN TCP':'WireGuard UDP')+' / '+(relayBusy?'Updating...':(relay.tunnel_up?(relay.route_enabled?'Routing enabled':'Tunnel ready'):(running?'Connecting / reconnecting'+(relay.openvpn_state?' ('+relay.openvpn_state+')':''):'Stopped')));
+  $('relayActiveLabel').textContent=names[selected]+' / '+(relayBusy?'Updating...':(relay.tunnel_up?(relay.route_enabled?'Routing enabled':'Tunnel ready'):(running?'Connecting / reconnecting'+(relay.openvpn_state?' ('+relay.openvpn_state+')':''):'Stopped')));
   $('relayProfileTitle').textContent=name;$('relayProfileState').textContent=(profile.imported?'Config imported':'No config')+' / '+(current?'Selected':'Standby');
   $('relaySelectBtn').disabled=busy||current||running||relay.route_enabled;$('relaySelectBtn').textContent=current?'Selected':'Use this tunnel';
   $('relayConfFile').accept=relayView==='openvpn'?'.ovpn,text/plain':'.conf,text/plain';$('relayImportBtn').textContent=relayView==='openvpn'?'Import .ovpn':'Import .conf';
   $('relayImportBtn').disabled=busy||(current&&(running||relay.route_enabled));$('relayDeleteConfigBtn').disabled=busy||!current||!profile.imported||running||relay.route_enabled;
-  $('relayTunnelLabel').textContent=relayView==='openvpn'?'tun-exit / TCP':'wg-exit / UDP';
+  $('relayTunnelLabel').textContent=relayView==='openvpn'?'tun-exit / TCP':relayView==='amneziawg'?'awg-exit / UDP':'wg-exit / UDP';
   $('RELAY_MASTER').checked=!!(relay.route_enabled||relay.route_requested);$('RELAY_MASTER').disabled=busy||(!relay.imported&&!relay.route_enabled);
   $('RELAY_TUNNEL').checked=current&&!!running;$('RELAY_ROUTE').checked=current&&!!(relay.route_enabled||relay.route_requested);
   for(const id of ['RELAY_TUNNEL','RELAY_ROUTE'])$(id).disabled=busy||!current||!profile.imported;
   document.querySelectorAll('.relay-action').forEach((btn)=>btn.disabled=busy||!current||!profile.imported);
   $('relayRefreshBtn').disabled=busy;renderRelayConfig(profile);renderRelayStatus(relay)
-  $('relayLogsBtn').hidden=relayView!=='openvpn';$('relayLogsBtn').disabled=busy;
+  $('relayLogsBtn').hidden=relayView==='wireguard';$('relayLogsBtn').disabled=busy;
+  $('relayLogsBtn').textContent=relayView==='amneziawg'?'AmneziaWG logs':'OpenVPN logs';
 }
 async function relayRequest(action,protocol=state.relay?.protocol||'wireguard'){
   if(relayBusy)return;relayBusy=true;renderRelay();
@@ -1116,8 +1125,8 @@ $('relayDeleteConfigBtn').addEventListener('click',async()=>{if(!confirm('Delete
 document.querySelectorAll('[data-relay-protocol]').forEach((btn)=>btn.addEventListener('click',()=>{relayView=btn.dataset.relayProtocol;$('relayConfFile').value='';renderRelay()}));
 $('relaySelectBtn').addEventListener('click',async()=>{try{await relayRequest('relay-select',relayView);toast('Tunnel selected')}catch{}});
 $('relayRefreshBtn').addEventListener('click',async()=>{try{const data=await api(API_BASE+'/relay');state.relay=data.relay;renderRelay()}catch(error){toast(error.message)}});
-$('relayLogsBtn').addEventListener('click',async()=>{try{const data=await api(API_BASE+'/relay/openvpn/logs');$('relayHealthCard').innerHTML='<pre class="relay-status-pre">'+escapeHtml(data.logs||'No logs')+'</pre>'}catch(error){toast(error.message)}});
-let relayConnectPoll=0;setInterval(async()=>{if(relayConnectPoll||relayBusy||$('relayTab').classList.contains('hidden')||state.relay?.protocol!=='openvpn'||!state.relay?.tunnel_running||state.relay?.tunnel_up)return;relayConnectPoll=1;try{const data=await api(API_BASE+'/relay');state.relay=data.relay;renderRelay()}catch{}finally{relayConnectPoll=0}},2500);
+$('relayLogsBtn').addEventListener('click',async()=>{try{const data=await api(API_BASE+'/relay/'+relayView+'/logs');$('relayHealthCard').innerHTML='<pre class="relay-status-pre">'+escapeHtml(data.logs||'No logs')+'</pre>'}catch(error){toast(error.message)}});
+let relayConnectPoll=0;setInterval(async()=>{if(relayConnectPoll||relayBusy||$('relayTab').classList.contains('hidden')||!['openvpn','amneziawg'].includes(state.relay?.protocol)||!state.relay?.tunnel_running||state.relay?.tunnel_up)return;relayConnectPoll=1;try{const data=await api(API_BASE+'/relay');state.relay=data.relay;renderRelay()}catch{}finally{relayConnectPoll=0}},2500);
 $('relayImportForm').addEventListener('submit',async(e)=>{e.preventDefault();if(relayBusy)return;const file=$('relayConfFile').files[0];if(!file){toast('Choose a config file');return}const form=new FormData();form.append('relayConf',file);relayBusy=true;renderRelay();try{const res=await fetch(API_ENDPOINTS.relayImport+'?protocol='+relayView,{method:'POST',body:form});const data=await res.json();if(!res.ok||data.ok===false)throw new Error(data.error||'Import failed');state.config=data.config;state.relay=data.relay;$('relayConfFile').value='';toast('Relay config imported')}catch(error){toast(error.message)}finally{relayBusy=false;renderRelay()}});
 document.querySelectorAll('.relay-action').forEach((btn)=>btn.addEventListener('click',async()=>{try{await relayRequest(btn.dataset.action);toast('Tunnel restarted')}catch{}}));
 $('clientSyncBtn').addEventListener('click',async()=>{const btn=$('clientSyncBtn');btn.disabled=true;try{const data=await api(API_ENDPOINTS.clientSync,{method:'POST',body:'{}'});state.clients=data.clients||state.clients;renderClients();const missing=data.result?.missing?.length||0;toast(missing?'Tim thay '+missing+' client da xoa khoi wg0':'Danh sach client da dong bo')}catch(error){toast(error.message)}finally{btn.disabled=false}});
@@ -1303,8 +1312,9 @@ async function handleApi(req, res) {
     return sendJson(res, 200, { ok: true, config: publicConfig(loadConfig()), result });
   }
 
-  if (req.method === "GET" && pathname === "/api/v1/relay/openvpn/logs") {
-    const { stdout: logs } = await execFilePromise("journalctl", ["-u", "wg-captive-openvpn", "-n", "60", "--no-pager", "-o", "cat"], { timeout: 3000 });
+  if (req.method === "GET" && ["/api/v1/relay/openvpn/logs", "/api/v1/relay/amneziawg/logs"].includes(pathname)) {
+    const unit = pathname.includes("/amneziawg/") ? "wg-captive-amneziawg" : "wg-captive-openvpn";
+    const { stdout: logs } = await execFilePromise("journalctl", ["-u", unit, "-n", "60", "--no-pager", "-o", "cat"], { timeout: 3000 });
     return sendJson(res, 200, { ok: true, logs: logs.slice(-16000) });
   }
   if (req.method === "POST" && (pathname === "/api/v1/relay/action" || pathname === "/api/relay/action" || pathname === "/api/relay/settings")) {
