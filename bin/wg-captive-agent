@@ -4,6 +4,11 @@ export PATH="/usr/local/lib/wg-captive-agent/amneziawg/bin:$PATH"
 
 CONFIG_FILE="${CONFIG_FILE:-/etc/wg-captive-agent.env}"
 
+amneziawg_tools_ready() {
+  command -v awg >/dev/null && command -v awg-quick >/dev/null || return 1
+  [[ -d /sys/module/amneziawg ]] || modinfo amneziawg >/dev/null 2>&1 || command -v amneziawg-go >/dev/null
+}
+
 if [[ -f "$CONFIG_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$CONFIG_FILE"
@@ -356,7 +361,7 @@ relay_tunnel_up() {
   if [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
     db_write_relay_conf
     [[ -s "$RELAY_EXIT_CONF" ]] || die "import AmneziaWG config first"
-    command -v awg >/dev/null && command -v awg-quick >/dev/null && command -v amneziawg-go >/dev/null || die "AmneziaWG tools missing; run wg-captive-install-amneziawg"
+    amneziawg_tools_ready || die "AmneziaWG tools/backend missing; run wg-captive-install-amneziawg"
     systemctl start wg-captive-amneziawg.service || return 1
     echo "relay_tunnel: starting AmneziaWG (check status and latest handshake)"
     return
@@ -589,7 +594,7 @@ relay_status() {
   fi
   if [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
     echo "amneziawg_service: $(systemctl is-active wg-captive-amneziawg.service 2>/dev/null || true)"
-    echo "amneziawg_tools: $(command -v awg >/dev/null && command -v awg-quick >/dev/null && command -v amneziawg-go >/dev/null && echo installed || echo missing)"
+    echo "amneziawg_tools: $(amneziawg_tools_ready && echo installed || echo missing)"
     relay_exec "awg show awg-exit 2>/dev/null || true"
   fi
   if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then

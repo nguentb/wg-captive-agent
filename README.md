@@ -630,19 +630,31 @@ Script khong go cac package he thong nhu `nodejs`, `iptables`, `ipset`, `curl`, 
 AmneziaWG la transport relay-to-exit thu ba. Router/client van ket noi WireGuard
 wg0 nhu cu. Moi lan chi chon mot transport; tat Route va Tunnel truoc khi doi.
 
-Sau khi cai/cap nhat agent, cai bo cong cu AWG mot lan tren **node relay**:
+Installer/updater tu dong chuan bi AWG kernel 3.1 va tools tren Ubuntu truoc
+khi thay file agent. Node da co module 3.1 duoc nap va tools 3.1 se duoc bo qua.
+Co the chay rieng tren **node relay**:
 
 ```bash
 sudo wg-captive-install-amneziawg
 ```
 
+Mac dinh script cai `amneziawg-dkms`, `amneziawg-tools` tu `ppa:amnezia/ppa`,
+kernel headers cua kernel dang chay va nap `amneziawg`. Khong reboot, khong
+thay module WireGuard thuong hay sua image wg-easy. Loi DKMS/headers/Secure Boot
+se dung update truoc khi thay agent. Neu AWG dang chay nhung can nang dependency,
+script yeu cau tat tunnel truoc; khong tu dong dung tunnel de nang module.
+Kernel mode khong can Go. Can Internet toi Ubuntu/PPA va dung kernel ho tro.
+
+Neu can userspace fallback, chon `sudo wg-captive-install-amneziawg --go`.
 Script build tu hai repo chinh thuc `amnezia-vpn/amneziawg-tools` va
 `amnezia-vpn/amneziawg-go`, ghim commit trong script. Ubuntu 24.04+ / Debian 12+
 can Internet toi GitHub va Go module proxy; Go 1.21+ bootstrap tu tai toolchain
 1.25 theo upstream. Build co the ton vai phut va RAM tam thoi. Binary nam rieng
 trong `/usr/local/lib/wg-captive-agent/amneziawg/bin`, khong ghi de bo AWG khac,
-khong cai DKMS/kernel module, khong sua image wg-easy. Updater khong build lai
-cong cu moi lan; chay lai lenh tren khi phien ban ghim thay doi.
+khong cai DKMS/kernel module. De updater dung mode nay (vi du Debian), chay
+`sudo env WG_CAPTIVE_AWG_MODE=go wg-captive-update`.
+Node khong can AWG hoac tu quan ly dependency co the dung
+`sudo env WG_CAPTIVE_AWG_MODE=skip wg-captive-update` de khong cai dependency.
 
 Tren **exit**, cai AmneziaWG va xuat **client profile `.conf`** tu Amnezia.
 Khong dung config WireGuard thuong hay file `vpn://`. Peer exit phai NAT/forward

@@ -5,6 +5,31 @@ set -euo pipefail
 TOOLS_REF=ee0f0a9aa34ff0a0da4b3433b9512781cfe02843
 GO_REF=b5928efb6ca19f0153958460c3d141f04abc5c2e
 DEST=/usr/local/lib/wg-captive-agent/amneziawg
+export PATH="$DEST/bin:$PATH"
+mode="${1:---kernel}"
+[[ "$#" -le 1 && ( "$mode" == --kernel || "$mode" == --go ) ]] || { echo 'Usage: wg-captive-install-amneziawg [--kernel|--go]' >&2; exit 1; }
+if [[ "$mode" == --kernel ]]; then
+  if [[ -r /sys/module/amneziawg/version ]] && grep -q '^3\.1' /sys/module/amneziawg/version && command -v awg-quick >/dev/null && awg --version 2>&1 | grep -q 'v3\.1'; then
+    echo 'AmneziaWG 3.1 kernel and tools already available'
+    exit 0
+  fi
+  if systemctl is-active --quiet wg-captive-amneziawg.service; then
+    echo 'Stop the AWG tunnel before installing/upgrading its kernel or tools' >&2
+    exit 1
+  fi
+  source /etc/os-release
+  [[ "$ID" == ubuntu ]] || { echo 'Automatic AWG kernel installation requires Ubuntu; install the module manually or select --go' >&2; exit 1; }
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common python3-launchpadlib gnupg2 build-essential dkms "linux-headers-$(uname -r)"
+  add-apt-repository -y ppa:amnezia/ppa
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y amneziawg-dkms amneziawg-tools
+  modprobe amneziawg
+  grep -q '^3\.1' /sys/module/amneziawg/version || { echo 'AWG 3.1 kernel is not loaded; check DKMS/Secure Boot and the installed kernel version' >&2; exit 1; }
+  command -v awg-quick >/dev/null && awg --version 2>&1 | grep -q 'v3\.1' || { echo 'AWG 3.1 tools are required' >&2; exit 1; }
+  echo 'AmneziaWG 3.1 kernel and tools ready; no reboot or WireGuard interface changes'
+  exit 0
+fi
 if [[ -x "$DEST/bin/awg" && -x "$DEST/bin/awg-quick" && -x "$DEST/bin/amneziawg-go" && -f "$DEST/version" ]] && [[ "$(cat "$DEST/version")" == "$TOOLS_REF $GO_REF" ]]; then
   echo 'Agent AmneziaWG tools already installed'
   exit 0

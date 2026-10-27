@@ -15,6 +15,13 @@ for script in bin/wg-captive-agent bin/wg-captive-redirect bin/wg-captive-openvp
   bash -n "$script"
 done
 
+# Prepare AWG before replacing agent files or stopping existing services.
+case "${WG_CAPTIVE_AWG_MODE:-kernel}" in
+  kernel|go) bash scripts/install-amneziawg.sh "--${WG_CAPTIVE_AWG_MODE:-kernel}" ;;
+  skip) echo 'Skipping AWG dependency installation (WG_CAPTIVE_AWG_MODE=skip)' ;;
+  *) echo 'WG_CAPTIVE_AWG_MODE must be kernel, go or skip' >&2; exit 1 ;;
+esac
+
 if ! command -v openvpn >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update
