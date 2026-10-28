@@ -625,6 +625,42 @@ Script khong go cac package he thong nhu `nodejs`, `iptables`, `ipset`, `curl`, 
 - Web admin can quyen doc `WG_EASY_JSON` hoac docker exec vao `WG_EASY_CONTAINER`, ghi `EXPIRED_FILE`, `BACKUP_DIR` va chay `wg-captive-agent sync`.
 - Auto pop-up khong the dam bao 100% tren moi OS/thiet bi, nhung day la co che dung nhat khi khong can thiep router/client.
 
+## Exit doc lap: wg-easy 15 + AWG kernel 3.1
+
+Script doc lap cho **exit Ubuntu 24.04 amd64/arm64** (khong chay tren relay dang
+co wg-easy). Chi tai mot file script, khong clone repo, khong cai agent,
+watchdog, captive portal hay API relay len exit:
+
+```bash
+curl -fL https://raw.githubusercontent.com/nguentb/wg-captive-agent/main/scripts/install-awg-exit.sh -o /root/install-awg-exit.sh
+sudo bash /root/install-awg-exit.sh --endpoint 138.124.55.192
+```
+
+Tuy chon `--port 51820 --web-port 51821`. Script cai kernel/tools tu PPA Amnezia,
+cai Docker tu repo chinh thuc neu chua co, ghim wg-easy `15.5.0`, bat
+`EXPERIMENTAL_AWG=true` va `OVERRIDE_AUTO_AWG=awg`. Khong cai Go, khong reboot,
+khong thay config router/relay. APT lock duoc cho toi da 600 giay, khong kill
+unattended-upgrades. Log: `/var/log/wg-captive-awg-exit-install.log`.
+
+Compose/data rieng trong `/opt/wg-captive-awg-exit` va named volume cua project
+`wg-captive-awg-exit`; container cung ten. Script tu choi container `wg-easy`
+co san, port bi chiem hay compose khong do script tao; khong tu migrate server cu.
+Chay lai giu compose va client data, khong reset admin hay xoa volume.
+
+Panel chi bind `127.0.0.1:51821`. Tu may tinh:
+
+```bash
+ssh -N -L 51821:127.0.0.1:51821 root@138.124.55.192
+```
+
+Mo `http://127.0.0.1:51821`, tao admin trong wizard, Host `138.124.55.192`, port
+`51820` (hoac port da chon). Chon subnet khong trung relay, vi du
+`10.66.66.0/24`; wizard hoan tat moi co VPN. Mo UDP port tren firewall nha cung cap.
+Khong mo public HTTP 51821; de vao tu Android khong can SSH, cau hinh HTTPS
+reverse proxy rieng. Script chua cai Caddy/TLS va chua tu bat tham so obfuscation
+3.1: kiem tra HeaderProtectionKey/S1-S4/RandomTrailers tren UI, tao client,
+xuat `.conf` roi import vao relay. Khong chia se private key/PSK.
+
 ## Relay AmneziaWG
 
 AmneziaWG la transport relay-to-exit thu ba. Router/client van ket noi WireGuard
