@@ -631,6 +631,11 @@ Script doc lap cho **exit Ubuntu 24.04 amd64/arm64** (khong chay tren relay dang
 co wg-easy). Chi tai mot file script, khong clone repo, khong cai agent,
 watchdog, captive portal hay API relay len exit:
 
+**Phan biet hai vai tro:** `install-remote.sh` / `wg-captive-update` la lenh
+cai/update **agent tren relay**. `install-awg-exit.sh` chi dung cho **exit**,
+khong can va khong goi bo cai agent. Repo nay chi la noi luu script exit.
+Thay IP vi du `138.124.55.192` bang IP public hoac hostname exit cua ban.
+
 ```bash
 curl -fL https://raw.githubusercontent.com/nguentb/wg-captive-agent/main/scripts/install-awg-exit.sh -o /root/install-awg-exit.sh
 sudo bash /root/install-awg-exit.sh --endpoint 138.124.55.192
@@ -640,7 +645,7 @@ Tuy chon `--port 51820 --web-port 51821`. Script cai kernel/tools tu PPA Amnezia
 cai Docker tu repo chinh thuc neu chua co, ghim wg-easy `15.5.0`, bat
 `EXPERIMENTAL_AWG=true` va `OVERRIDE_AUTO_AWG=awg`. Khong cai Go, khong reboot,
 khong thay config router/relay. APT lock duoc cho toi da 600 giay, khong kill
-unattended-upgrades. Log: `/var/log/wg-captive-awg-exit-install.log`.
+unattended-upgrades.
 
 Compose/data rieng trong `/opt/wg-captive-awg-exit` va named volume cua project
 `wg-captive-awg-exit`; container cung ten. Script tu choi container `wg-easy`
@@ -660,6 +665,24 @@ Khong mo public HTTP 51821; de vao tu Android khong can SSH, cau hinh HTTPS
 reverse proxy rieng. Script chua cai Caddy/TLS va chua tu bat tham so obfuscation
 3.1: kiem tra HeaderProtectionKey/S1-S4/RandomTrailers tren UI, tao client,
 xuat `.conf` roi import vao relay. Khong chia se private key/PSK.
+
+### Kiem tra exit
+
+DKMS co the build cho nhieu kernel da cai nen ton vai phut. Khi gap APT lock,
+script cho toi da 10 phut roi dung; de tac vu cu hoan tat va chay lai cung lenh.
+Khong xoa lock, kill dpkg hay reboot trong luc dang build. Script khong tu reboot.
+
+Sau khi hoan tat wizard, kiem tra (interface mac dinh la `wg0`):
+
+```bash
+cat /sys/module/amneziawg/version
+docker compose -f /opt/wg-captive-awg-exit/compose.yml ps
+docker exec wg-captive-awg-exit ip -d link show wg0
+```
+
+Module can la `3.1...`, loai interface can la `amneziawg`. Container/web chay
+chua du de xac nhan tunnel: xem handshake gan nhat va RX/TX tren panel sau khi
+relay ket noi. Neu da doi ten interface, thay `wg0` bang ten thuc te.
 
 ## Relay AmneziaWG
 
