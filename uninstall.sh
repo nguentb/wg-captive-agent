@@ -99,6 +99,7 @@ remove_relay_rules() {
   run systemctl stop wg-captive-openvpn.service
   run systemctl stop wg-captive-amneziawg.service
   run systemctl stop wg-captive-xray.service
+  run systemctl stop wg-captive-reality.service
   relay_shell "while ip rule del priority '$CAPTIVE_MARK_PRIORITY' fwmark '$CAPTIVE_MARK' table main 2>/dev/null; do :; done"
   relay_shell "while ip rule del priority '$RELAY_RULE_PRIORITY' fwmark '$RELAY_MARK' table '$RELAY_ROUTE_TABLE' 2>/dev/null; do :; done"
   relay_shell "while ip rule del priority '$RELAY_RULE_PRIORITY' from '$RELAY_CLIENT_SUBNET' table '$RELAY_ROUTE_TABLE' 2>/dev/null; do :; done"
@@ -128,6 +129,7 @@ stop_services() {
     run systemctl stop wg-captive-openvpn.service
     run systemctl stop wg-captive-amneziawg.service
     run systemctl stop wg-captive-xray.service
+    run systemctl stop wg-captive-reality.service
   fi
 }
 
@@ -142,6 +144,9 @@ remove_files() {
   rm -f /etc/systemd/system/wg-captive-watchdog.service
   rm -f /etc/systemd/system/wg-captive-watchdog.timer
   rm -f /etc/systemd/system/wg-captive-xray.service
+  rm -f /etc/systemd/system/wg-captive-reality.service
+  rm -f /usr/local/sbin/wg-captive-reality
+  rm -f /etc/wg-captive-relay-reality.json
   rm -f "$AGENT_BIN"
   rm -f /usr/local/sbin/wg-captive-redirect
   rm -f /usr/local/sbin/wg-captive-openvpn

@@ -15,7 +15,7 @@ Captive firewall agent cho cac WireGuard/wg-easy server, kem web admin de quan l
 - Backup local `.tar.gz` gom `state-db`, `metadata` va `wg0.json`.
 - Gui backup len Telegram ngay sau khi tao neu da cau hinh bot token/chat ID.
 - Restore tu file backup upload len web admin.
-- Tab Relay quan ly hai tunnel: WireGuard UDP (`.conf`, `wg-exit`) va OpenVPN TCP (`.ovpn`, `tun-exit`), chuyen thu cong khi UDP loi.
+- Tab Relay ho tro WireGuard UDP, AmneziaWG UDP va Xray REALITY (TUN).
 
 ## Mo hinh
 
@@ -53,7 +53,7 @@ curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg 
 sudo chmod 0644 /etc/apt/keyrings/nodesource.gpg
 echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
 sudo apt update
-sudo apt install -y iptables ipset tar nodejs util-linux wireguard-tools openvpn
+sudo apt install -y iptables ipset tar nodejs util-linux wireguard-tools
 node -v
 node -p 'require("node:net").getDefaultAutoSelectFamily()'
 ```
@@ -220,21 +220,16 @@ Tab `Captive`:
 - Nut `Dong bo client` doc lai nguon WireGuard ngay lap tuc. Tai lai trang Captive cung tu dong doi chieu nguon voi SQLite.
 - Client khong con trong `wg0.json`/`wg0.conf` duoc danh dau `source_present=0`, nhung khong bi xoa tu dong. Tab `Da xoa` hien cac client nay va chi tai do moi co nut thung rac xoa ban ghi SQLite. Neu nguon WireGuard dang loi/khong doc duoc, backend bo qua lan doi chieu va khong cho xoa.
 - Danh sach client trong admin giu dung thu tu trong `wg0.json`/`wg0.conf`; IP nho hon nhung nam cuoi file se van nam cuoi danh sach.
-- `Blocked destination IPs` trong Settings chap nhan moi dong mot IP/CIDR hoac ngan cach bang dau phay, vi du `203.0.113.10` hoac `198.51.100.0/24`. Rule chi ap dung cho traffic forward di vao tu `WG_INTERFACE`, khong doi trang thai user va khong anh huong route khac cua VPS. Khi relay dang bat, traffic toi IP nay duoc bo qua truoc buoc mark relay roi bi reject, nen khong duoc chuyen tiep qua exit. Cac dong sai dinh dang se bi bo qua khi sync firewall.
+- Trong Settings, bat `Block destination IPs`, nhap IPv4/CIDR vao danh sach, roi bam Save. Co the nhap moi dong mot muc hoac ngan cach bang dau phay, vi du `203.0.113.10` hoac `198.51.100.0/24`. Khi tat hoac khong co muc hop le, agent go rule so sanh trong FORWARD va chain mark relay, giu danh sach da luu va khong khoi dong lai tunnel. Danh sach da luu tu ban cu van duoc ap dung neu chua dat cong tac rieng.
 
 Tab `Relay`:
 
-- Hai muc `WireGuard UDP` va `OpenVPN TCP` luu config rieng. Chon muc de xem/import config; nut `Use this tunnel` chon giao thuc se chay.
+- WireGuard UDP, AmneziaWG UDP va Xray REALITY luu profile rieng. Nut `Use this tunnel` chon giao thuc se chay.
 - Chi mot tunnel duoc chon de relay. Tat switch Relay (hoac tat Route va Tunnel), chon muc con lai, bam `Use this tunnel`, roi bat Relay. Khong co tu dong failover.
 - WireGuard import file `.conf` cua exit server.
 - File import duoc tu dong them/thay `Table = off` trong `[Interface]` de tranh wg-quick doi default route cua container.
-- OpenVPN import file `.ovpn` TCP, gom inline `<ca>`, `<cert>`, `<key>` va neu co `<tls-crypt>`/`<tls-auth>`. Khong chap nhan profile UDP, script, plugin, file certificate ben ngoai hoac password tuong tac.
-- OpenVPN 2.6+ chay tren host bang service `wg-captive-openvpn`, vao network namespace cua wg-easy qua `nsenter`, tao `tun-exit`. Khong can cai OpenVPN trong container.
-- `route-nopull`, `route-noexec` giu routing va DNS do captive agent quan ly. Endpoint OpenVPN duoc resolve tren host truoc khi vao namespace.
 - Tunnel/Restart/Route quan ly giao thuc dang chon. Dung tunnel se tat route truoc. Khong thay config dang chay; config du phong co the import trong khi tunnel con lai dang chay.
-- Nut Refresh tai lai status thu cong. Config cua ca hai tunnel va giao thuc dang chon nam trong SQLite, duoc backup/restore cung `state-db`.
-- Huong dan cai exit TCP va tao `.ovpn`: [OpenVPN TCP relay](docs/openvpn-relay.md).
-- Cai exit tu dong: chuyen `scripts/install-openvpn-exit.sh` len exit, chay `sudo bash /root/install-openvpn-exit.sh --endpoint IP_PUBLIC_EXIT`. Script xuat `/root/relay-node.ovpn`, tu tao NAT persistent va giu wg-easy dang chay.
+- Nut Refresh tai lai status thu cong. Profile cua cac tunnel va giao thuc dang chon nam trong SQLite, duoc backup/restore cung `state-db`.
 - `Enable route`/`Disable route` tao mangle chain `WG_RELAY_MARK`: client trong `RELAY_CLIENT_SUBNET` se duoc mark de di qua table relay, nhung IP dang nam trong ipset `wg_expired` se bi bo qua truoc khi mark.
 - DNS cua client khong di qua exit: `udp/53`, `tcp/53` va `tcp/853` duoc bo qua trong chain relay mark, nen resolve DNS van xu ly tai node relay/duong ra mac dinh cua node.
 - Vi relay chi route traffic da duoc `WG_RELAY_MARK`, user bi `disabled`/`expired` van giu co che captive popup/portal; user active moi di qua exit node.
@@ -254,7 +249,7 @@ Tu phien ban SQLite, du lieu chinh nam trong `STATE_DB`:
 
 - `client_state`: IP, ten client lay tu wg-easy `wg0.json`, public key, `disabled`, `expires_at` va `expired_at`.
 - `node_config`: cac setting chung cua node nhu portal URL, Telegram, DNS block, server IP.
-- `relay_config`: trang thai relay, subnet route, giao thuc dang chon, config WireGuard va OpenVPN da import. Update tu ban cu tu dong them cot va mac dinh giu WireGuard.
+- `relay_config`: trang thai relay, subnet route, giao thuc dang chon va cac profile da import.
 - `api_tokens`: cac token API cua node, dung cho central server/tool ben ngoai goi API.
 - `captive_redirect_tokens`: token random tam thoi cho portal tra cuu user khi node redirect captive, mac dinh het han sau 15 phut.
 
@@ -578,7 +573,7 @@ Lenh relay:
 ```bash
 sudo wg-captive-agent relay-status
 sudo wg-captive-agent relay-disable
-sudo wg-captive-agent relay-select openvpn
+sudo wg-captive-agent relay-select amneziawg
 sudo wg-captive-agent relay-enable
 # Doi ve UDP: relay-disable, relay-select wireguard, relay-enable.
 sudo wg-captive-agent relay-tunnel-up
@@ -753,8 +748,8 @@ Tai lieu upstream: [AWG-Go](https://github.com/amnezia-vpn/amneziawg-go),
 ## Watchdog WireGuard / AmneziaWG
 
 Installer bat `wg-captive-watchdog.timer`: moi 30 giay sau khi vong truoc hoan tat.
-Chi theo doi transport duoc chon va tunnel dang duoc yeu cau bat; OpenVPN giu
-supervisor rieng. Lan cap nhat dau tien tiep nhan tunnel WG/AWG dang chay, khong tu
+Chi theo doi WG/AWG dang duoc chon va tunnel dang duoc yeu cau bat.
+Lan cap nhat dau tien tiep nhan tunnel WG/AWG dang chay, khong tu
 bat tunnel dang tat. Trang thai yeu cau tunnel luu trong
 `/etc/wg-captive-relay-tunnel.state` va chi thay doi qua agent/API.
 
@@ -789,10 +784,17 @@ sudo journalctl -u wg-captive-watchdog -n 60 --no-pager
 sudo systemctl status wg-captive-watchdog.timer
 ```
 
-## Transport Tam Dung
+## Relay Xray REALITY
 
-Xray tam thoi da duoc loai bo; Relay ho tro WireGuard UDP, OpenVPN TCP va AmneziaWG UDP.
-Installer dung service va go route Xray cu truoc khi thay binary agent. Neu Xray
-dang duoc chon, relay duoc dua ve WireGuard o trang thai tat; khong tu bat tunnel.
-Profile cu trong SQLite va file JSON duoc giu lai, khong con duoc nap/chay. Backup
-cu van restore duoc, nhung transport khong con ho tro se duoc dua ve trang thai tat.
+Relay co tab rieng **Xray REALITY** cho VLESS RAW/TCP + REALITY + Vision. Nhap
+endpoint, UUID, SNI, REALITY public key va Short ID, hoac dan link VLESS.
+Xray chay native, khong can sing-box. Agent van quan ly policy routing.
+Xem [cau hinh relay va exit](docs/xray-reality.md).
+
+Profile Xray cu chi duoc luu tru; khong tu chay lai hay import full core JSON.
+WireGuard va AmneziaWG van dung duoc nhu truoc.
+
+OpenVPN da duoc bo khoi relay va khong con la goi phu thuoc cua agent.
+Khi update node dang chon OpenVPN, installer tat route/tunnel cu, chon
+WireGuard o trang thai tat va giu profile OpenVPN cu tren node. Installer
+khong go goi OpenVPN hay thay doi dich vu OpenVPN exit rieng.

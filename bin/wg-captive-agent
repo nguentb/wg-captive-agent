@@ -18,6 +18,9 @@ WG_INTERFACE="${WG_INTERFACE:-wg0}"
 IPSET_NAME="${IPSET_NAME:-wg_expired}"
 BLOCKED_DEST_IPSET_NAME="${BLOCKED_DEST_IPSET_NAME:-wg_blocked_dst}"
 BLOCKED_DEST_IPS="${BLOCKED_DEST_IPS:-}"
+BLOCKED_DEST_ENABLED_DEFAULT="${BLOCKED_DEST_ENABLED:-1}"
+BLOCKED_DEST_ENABLED="$BLOCKED_DEST_ENABLED_DEFAULT"
+BLOCKED_DEST_ACTIVE=0
 PORTAL_IP="${PORTAL_IP:-}"
 PORTAL_URL="${PORTAL_URL:-}"
 CAPTIVE_REDIRECT_PORT="${CAPTIVE_REDIRECT_PORT:-51823}"
@@ -38,10 +41,9 @@ RELAY_ROUTE_FLAG="${RELAY_ROUTE_FLAG:-/etc/wg-captive-relay.enabled}"
 RELAY_TUNNEL_FLAG="${RELAY_TUNNEL_FLAG:-/etc/wg-captive-relay-tunnel.state}"
 RELAY_HEALTH_FILE="${RELAY_HEALTH_FILE:-/run/wg-captive-agent/relay-health}"
 RELAY_PROTOCOL="wireguard"
-RELAY_OPENVPN_CONF="${RELAY_OPENVPN_CONF:-/etc/wg-captive-relay-exit.ovpn}"
+RELAY_REALITY_CONF=/etc/wg-captive-relay-reality.json
+XRAY_BIN="${XRAY_BIN:-/usr/local/bin/xray}"
 RELAY_AMNEZIAWG_CONF="${RELAY_AMNEZIAWG_CONF:-/etc/wg-captive-relay-awg.conf}"
-OPENVPN_RUNTIME_DIR="${OPENVPN_RUNTIME_DIR:-/run/wg-captive-openvpn}"
-OPENVPN_STATE_HELPER="${OPENVPN_STATE_HELPER:-/usr/local/lib/wg-captive-agent/openvpn-state.js}"
 RELAY_WG_EXIT_IF="$RELAY_EXIT_IF"
 RELAY_LOCK_FILE="${RELAY_LOCK_FILE:-/run/wg-captive-agent/relay.lock}"
 CAPTIVE_MARK="${CAPTIVE_MARK:-0x19}"
@@ -93,6 +95,8 @@ db_load_runtime_config() {
   value="$(db_config_value PORTAL_URL)"; [[ -n "$value" ]] && PORTAL_URL="$value"
   value="$(db_config_value BLOCK_DNS)"; [[ -n "$value" ]] && BLOCK_DNS="$value"
   value="$(db_config_value BLOCK_DOT)"; [[ -n "$value" ]] && BLOCK_DOT="$value"
+  value="$(db_config_value BLOCKED_DEST_ENABLED)"
+  BLOCKED_DEST_ENABLED="${value:-$BLOCKED_DEST_ENABLED_DEFAULT}"
   if db_config_exists BLOCKED_DEST_IPS; then
     BLOCKED_DEST_IPS="$(db_config_text BLOCKED_DEST_IPS)"
   fi
@@ -101,12 +105,12 @@ db_load_runtime_config() {
   value="$(db_scalar "SELECT route_table FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_ROUTE_TABLE="$value"
   value="$(db_scalar "SELECT exit_conf_path FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_EXIT_CONF="$value"
   RELAY_WG_EXIT_IF="$RELAY_EXIT_IF"
+  value="$(db_scalar "SELECT reality_conf_path FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_REALITY_CONF="$value"
   value="$(db_scalar "SELECT protocol FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_PROTOCOL="$value"
-  value="$(db_scalar "SELECT openvpn_conf_path FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_OPENVPN_CONF="$value"
   value="$(db_scalar "SELECT amneziawg_conf_path FROM relay_config WHERE id=1;" || true)"; [[ -n "$value" ]] && RELAY_AMNEZIAWG_CONF="$value"
-  if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
-    RELAY_EXIT_IF="tun-exit"
-    RELAY_EXIT_CONF="$RELAY_OPENVPN_CONF"
+  if [[ "$RELAY_PROTOCOL" == reality ]]; then
+    RELAY_EXIT_IF=xray-exit
+    RELAY_EXIT_CONF="$RELAY_REALITY_CONF"
   elif [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
     RELAY_EXIT_IF="awg-exit"
     RELAY_EXIT_CONF="$RELAY_AMNEZIAWG_CONF"
@@ -117,7 +121,7 @@ db_write_relay_conf() {
   [[ -f "$STATE_DB" ]] || return 0
   command -v sqlite3 >/dev/null 2>&1 || return 0
   local content column=exit_conf
-  [[ "$RELAY_PROTOCOL" == "openvpn" ]] && column=openvpn_conf
+  [[ "$RELAY_PROTOCOL" == reality ]] && column=reality_conf
   [[ "$RELAY_PROTOCOL" == "amneziawg" ]] && column=amneziawg_conf
   content="$(sqlite3 -noheader "$STATE_DB" "SELECT $column FROM relay_config WHERE id=1;" 2>/dev/null || true)"
   if [[ -n "$content" && ! -f "$RELAY_EXIT_CONF" ]]; then
@@ -132,10 +136,10 @@ db_set_relay_enabled() {
 }
 
 db_clear_relay_conf() {
-  if [[ "$RELAY_PROTOCOL" == "amneziawg" ]]; then
+  if [[ "$RELAY_PROTOCOL" == reality ]]; then
+    db_exec "UPDATE relay_config SET enabled=0, reality_conf=NULL, reality_imported_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=1;"
+  elif [[ "$RELAY_PROTOCOL" == "amneziawg" ]]; then
     db_exec "UPDATE relay_config SET enabled=0, amneziawg_conf=NULL, amneziawg_imported_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=1;"
-  elif [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
-    db_exec "UPDATE relay_config SET enabled=0, openvpn_conf=NULL, openvpn_imported_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=1;"
   else
     db_exec "UPDATE relay_config SET enabled=0, exit_conf=NULL, imported_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=1;"
   fi
@@ -150,7 +154,7 @@ NETNS_PID=""
 
 usage() {
   cat <<'EOF'
-Usage: wg-captive-agent [run|sync|cleanup|status|relay-enable|relay-disable|relay-delete-config|relay-on|relay-off|relay-status|relay-tunnel-up|relay-tunnel-down|relay-restart|relay-restore|relay-select wireguard|relay-select openvpn|relay-select amneziawg]
+Usage: wg-captive-agent [run|sync|cleanup|status|relay-enable|relay-disable|relay-delete-config|relay-on|relay-off|relay-status|relay-tunnel-up|relay-tunnel-down|relay-restart|relay-restore|relay-select wireguard|relay-select amneziawg|relay-select reality]
 
 Commands:
   run      Sync expired peers in a loop and keep firewall rules installed.
@@ -241,13 +245,11 @@ ensure_chain() {
 
 ensure_firewall() {
   ips create "$IPSET_NAME" hash:ip -exist
-  ips create "$BLOCKED_DEST_IPSET_NAME" hash:net -exist
 
   ensure_chain nat "$NAT_CHAIN"
   ensure_chain filter "$FILTER_CHAIN"
   ensure_chain mangle "$MARK_CHAIN"
 
-  iptables_insert_once filter FORWARD -i "$WG_INTERFACE" -m set --match-set "$BLOCKED_DEST_IPSET_NAME" dst -j REJECT
   iptables_append_once nat PREROUTING -i "$WG_INTERFACE" -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN"
   iptables_append_once nat PREROUTING -m set --match-set "$IPSET_NAME" src -j "$NAT_CHAIN"
   iptables_insert_once mangle PREROUTING -m set --match-set "$IPSET_NAME" src -j "$MARK_CHAIN"
@@ -328,14 +330,17 @@ iptables -t mangle -A '$MARK_CHAIN' -j MARK --set-mark '$CAPTIVE_MARK'
 }
 
 relay_ensure_route_mark() {
+  local blocked_rule=""
+  if [[ "$BLOCKED_DEST_ACTIVE" == 1 ]]; then
+    blocked_rule="iptables -t mangle -A '$RELAY_MARK_CHAIN' -m set --match-set '$BLOCKED_DEST_IPSET_NAME' dst -j RETURN"
+  fi
   relay_exec "
 ipset create '$IPSET_NAME' hash:ip -exist
-ipset create '$BLOCKED_DEST_IPSET_NAME' hash:net -exist
 iptables -t mangle -N '$RELAY_MARK_CHAIN' 2>/dev/null || true
 iptables -t mangle -C PREROUTING -s '$RELAY_CLIENT_SUBNET' -j '$RELAY_MARK_CHAIN' 2>/dev/null || iptables -t mangle -A PREROUTING -s '$RELAY_CLIENT_SUBNET' -j '$RELAY_MARK_CHAIN'
 iptables -t mangle -F '$RELAY_MARK_CHAIN'
 iptables -t mangle -A '$RELAY_MARK_CHAIN' -m set --match-set '$IPSET_NAME' src -j RETURN
-iptables -t mangle -A '$RELAY_MARK_CHAIN' -m set --match-set '$BLOCKED_DEST_IPSET_NAME' dst -j RETURN
+$blocked_rule
 iptables -t mangle -A '$RELAY_MARK_CHAIN' -p udp --dport 53 -j RETURN
 iptables -t mangle -A '$RELAY_MARK_CHAIN' -p tcp --dport 53 -j RETURN
 iptables -t mangle -A '$RELAY_MARK_CHAIN' -p tcp --dport 853 -j RETURN
@@ -343,39 +348,39 @@ iptables -t mangle -A '$RELAY_MARK_CHAIN' -j MARK --set-mark '$RELAY_MARK'
 "
 }
 
+reality_running() {
+  local state
+  state="$(systemctl is-active wg-captive-reality.service 2>/dev/null || true)"
+  [[ "$state" == active || "$state" == activating || "$state" == deactivating ]]
+}
+
 relay_tunnel_ready() {
-  if [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
+  if [[ "$RELAY_PROTOCOL" == reality ]]; then
+    systemctl is-active --quiet wg-captive-reality.service || return 1
+    relay_exec "ip link show dev xray-exit up | grep -q ."
+  elif [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
     systemctl is-active --quiet wg-captive-amneziawg.service || return 1
     relay_exec "ip -4 addr show dev awg-exit 2>/dev/null | grep -q 'inet '"
-  elif [[ "$RELAY_PROTOCOL" == openvpn ]]; then
-    systemctl is-active --quiet wg-captive-openvpn.service || return 1
-    relay_exec "ip -4 addr show dev tun-exit 2>/dev/null | grep -q 'inet '" || return 1
-    node "$OPENVPN_STATE_HELPER" ready "$OPENVPN_RUNTIME_DIR/management.sock"
   else
     relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1"
   fi
 }
 
 relay_tunnel_up() {
-  [[ "$RELAY_PROTOCOL" == wireguard || "$RELAY_PROTOCOL" == openvpn || "$RELAY_PROTOCOL" == amneziawg ]] || die "selected transport is no longer supported; run the installer to migrate"
+  if [[ "$RELAY_PROTOCOL" == reality ]]; then
+    db_write_relay_conf
+    [[ -s "$RELAY_EXIT_CONF" ]] || die "save an Xray profile first"
+    [[ -x "$XRAY_BIN" ]] || die "Xray core missing at $XRAY_BIN"
+    systemctl start wg-captive-reality.service
+    return
+  fi
+  [[ "$RELAY_PROTOCOL" == wireguard || "$RELAY_PROTOCOL" == amneziawg ]] || die "selected transport is no longer supported; run the installer to migrate"
   if [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
     db_write_relay_conf
     [[ -s "$RELAY_EXIT_CONF" ]] || die "import AmneziaWG config first"
     amneziawg_tools_ready || die "AmneziaWG tools/backend missing; run wg-captive-install-amneziawg"
     systemctl start wg-captive-amneziawg.service || return 1
     echo "relay_tunnel: starting AmneziaWG (check status and latest handshake)"
-    return
-  fi
-  if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
-    db_write_relay_conf
-    [[ -s "$RELAY_EXIT_CONF" ]] || die "import OpenVPN TCP config first"
-    command -v openvpn >/dev/null 2>&1 || die "openvpn is required; install with apt install openvpn"
-    if systemctl is-active --quiet wg-captive-openvpn.service && relay_tunnel_ready; then
-      echo "relay_tunnel: up"
-      return
-    fi
-    systemctl start wg-captive-openvpn.service || return 1
-    echo "relay_tunnel: connecting (retries continue in background; check OpenVPN connection state)"
     return
   fi
   relay_copy_conf || return 1
@@ -385,13 +390,12 @@ relay_tunnel_up() {
 }
 
 relay_tunnel_down() {
-  if [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
-    systemctl stop wg-captive-amneziawg.service || return 1
-    echo "relay_tunnel: down"
+  if [[ "$RELAY_PROTOCOL" == reality ]]; then
+    systemctl stop wg-captive-reality.service
     return
   fi
-  if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
-    systemctl stop wg-captive-openvpn.service || return 1
+  if [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
+    systemctl stop wg-captive-amneziawg.service || return 1
     echo "relay_tunnel: down"
     return
   fi
@@ -420,16 +424,22 @@ iptables -X WG_RELAY 2>/dev/null || true
 }
 
 relay_route_on() {
-  local allow_start="${1:-yes}"
+  [[ "$RELAY_PROTOCOL" == wireguard || "$RELAY_PROTOCOL" == amneziawg || "$RELAY_PROTOCOL" == reality ]] || die "selected transport is no longer supported; run the installer to migrate"
+  local allow_start="${1:-yes}" route_guard=""
+  local relay_nat="iptables -t nat -A POSTROUTING -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j MASQUERADE"
+  if [[ "$RELAY_PROTOCOL" == reality ]]; then
+    route_guard="ip route add prohibit default metric 32760 table '$RELAY_ROUTE_TABLE'"
+    relay_nat=""
+  fi
   db_write_relay_conf
   [[ -f "$RELAY_EXIT_CONF" ]] || die "import relay exit config before enabling route"
-  if [[ "$RELAY_PROTOCOL" == openvpn || "$RELAY_PROTOCOL" == amneziawg ]] && ! relay_tunnel_ready; then
+  if [[ "$RELAY_PROTOCOL" == amneziawg || "$RELAY_PROTOCOL" == reality ]] && ! relay_tunnel_ready; then
     [[ "$allow_start" == yes ]] || return 75
-    relay_tunnel_up
+    relay_tunnel_up || return 1
     touch "$RELAY_ROUTE_FLAG"
     db_set_relay_enabled 1
-    if [[ "$RELAY_PROTOCOL" == openvpn ]]; then
-      echo "relay_route: pending OpenVPN connection; cancel with relay-off"
+    if [[ "$RELAY_PROTOCOL" == reality ]]; then
+      echo "relay_route: waiting for Xray TUN"
     else
       echo "relay_route: pending AmneziaWG tunnel; cancel with relay-off"
     fi
@@ -437,15 +447,12 @@ relay_route_on() {
   fi
   relay_ensure_forward
   resolve_netns
-  sync_blocked_dest_ipset
+  sync_blocked_dest_ipset || return 1
   relay_ensure_captive_mark || return 1
   relay_ensure_route_mark || return 1
   if ! relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1"; then
     [[ "$allow_start" == yes ]] || return 1
     relay_tunnel_up
-  fi
-  if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
-    relay_exec "ip -4 addr show dev tun-exit | grep -q 'inet '" || die "OpenVPN tunnel has no IPv4 address"
   fi
   relay_route_off >/dev/null 2>&1 || true
   relay_ensure_captive_mark || return 1
@@ -456,8 +463,9 @@ iptables -F WG_RELAY
 iptables -C FORWARD -j WG_RELAY 2>/dev/null || iptables -A FORWARD -j WG_RELAY
 iptables -A WG_RELAY -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j ACCEPT
 ip route add default dev '$RELAY_EXIT_IF' table '$RELAY_ROUTE_TABLE'
+$route_guard
+$relay_nat
 ip rule add priority '$RELAY_RULE_PRIORITY' fwmark '$RELAY_MARK' table '$RELAY_ROUTE_TABLE'
-iptables -t nat -A POSTROUTING -s '$RELAY_CLIENT_SUBNET' -o '$RELAY_EXIT_IF' -j MASQUERADE
 "; then
     relay_route_off >/dev/null 2>&1 || true
     echo 'wg-captive-agent: failed to apply relay routing/firewall' >&2
@@ -514,20 +522,20 @@ relay_restore() {
 
 relay_reapply() {
   # Re-check intent under relay.lock: a queued reconnect must not undo a manual stop.
-  [[ ( "$RELAY_PROTOCOL" == openvpn || "$RELAY_PROTOCOL" == amneziawg ) && -f "$RELAY_ROUTE_FLAG" ]] || return 0
+  [[ ( "$RELAY_PROTOCOL" == amneziawg || "$RELAY_PROTOCOL" == reality ) && -f "$RELAY_ROUTE_FLAG" ]] || return 0
   relay_tunnel_ready || return 75
   relay_route_on no
 }
 
 relay_select() {
   local protocol="${1:-}"
-  [[ "$protocol" == "wireguard" || "$protocol" == "openvpn" || "$protocol" == amneziawg ]] || die "protocol must be wireguard, openvpn or amneziawg"
+  [[ "$protocol" == "wireguard" || "$protocol" == amneziawg || "$protocol" == reality ]] || die "invalid relay protocol"
   [[ "$protocol" == "$RELAY_PROTOCOL" ]] && return 0
   [[ ! -f "$RELAY_ROUTE_FLAG" ]] || die "stop relay route and tunnel before switching protocol"
   if relay_exec "ip rule show | grep -Eq 'fwmark $RELAY_MARK lookup $RELAY_ROUTE_TABLE|from $RELAY_CLIENT_SUBNET lookup $RELAY_ROUTE_TABLE'"; then
     die "stop relay route before switching protocol"
   fi
-  if relay_exec "ip link show '$RELAY_WG_EXIT_IF' >/dev/null 2>&1 || ip link show tun-exit >/dev/null 2>&1 || ip link show awg-exit >/dev/null 2>&1" || systemctl is-active --quiet wg-captive-openvpn.service || systemctl is-active --quiet wg-captive-amneziawg.service; then
+  if relay_exec "ip link show '$RELAY_WG_EXIT_IF' >/dev/null 2>&1 || ip link show awg-exit >/dev/null 2>&1 || ip link show xray-exit >/dev/null 2>&1" || systemctl is-active --quiet wg-captive-amneziawg.service || reality_running; then
     die "stop relay route and tunnel before switching protocol"
   fi
   [[ -f "$STATE_DB" ]] || die "SQLite database is required"
@@ -548,11 +556,9 @@ relay_disable() {
 relay_delete_config() {
   local tunnel_on=0
   local route_on=0
+  if [[ "$RELAY_PROTOCOL" == reality ]] && reality_running; then tunnel_on=1; fi
 
   if relay_exec "ip link show '$RELAY_EXIT_IF' >/dev/null 2>&1"; then
-    tunnel_on=1
-  fi
-  if [[ "$RELAY_PROTOCOL" == "openvpn" ]] && systemctl is-active --quiet wg-captive-openvpn.service; then
     tunnel_on=1
   fi
   if [[ "$RELAY_PROTOCOL" == amneziawg ]] && systemctl is-active --quiet wg-captive-amneziawg.service; then
@@ -589,21 +595,16 @@ relay_status() {
   echo "relay_exit_if: $RELAY_EXIT_IF"
   echo "relay_client_subnet: $RELAY_CLIENT_SUBNET"
   echo "relay_route_table: $RELAY_ROUTE_TABLE"
-  if [[ -f "$RELAY_HEALTH_FILE" ]]; then
+  if [[ "$RELAY_PROTOCOL" == reality ]]; then
+    echo "reality_service: $(systemctl is-active wg-captive-reality.service 2>/dev/null || true)"
+  fi
+  if [[ "$RELAY_PROTOCOL" != reality && -f "$RELAY_HEALTH_FILE" ]]; then
     grep -E '^watchdog_(state|failures|last_check|last_restart):' "$RELAY_HEALTH_FILE" || true
   fi
   if [[ "$RELAY_PROTOCOL" == amneziawg ]]; then
     echo "amneziawg_service: $(systemctl is-active wg-captive-amneziawg.service 2>/dev/null || true)"
     echo "amneziawg_tools: $(amneziawg_tools_ready && echo installed || echo missing)"
     relay_exec "awg show awg-exit 2>/dev/null || true"
-  fi
-  if [[ "$RELAY_PROTOCOL" == "openvpn" ]]; then
-    echo "openvpn_service: $(systemctl is-active wg-captive-openvpn.service 2>/dev/null || true)"
-    if relay_exec "ip -4 addr show dev tun-exit 2>/dev/null | grep -q 'inet '"; then
-      node "$OPENVPN_STATE_HELPER" state "$OPENVPN_RUNTIME_DIR/management.sock" || true
-    else
-      echo "openvpn_connection: WAITING_FOR_TUN"
-    fi
   fi
   echo
   echo "=== Tunnel ==="
@@ -695,21 +696,57 @@ fetch_blocked_dest_ips() {
   done
 }
 
+remove_blocked_dest_rule() {
+  local table="$1"
+  shift
+  while iptables_has_rule "$table" "$@"; do
+    ipt -t "$table" -D "$@" || return 1
+  done
+}
+
+apply_blocked_dest_rules() {
+  local match=(-m set --match-set "$BLOCKED_DEST_IPSET_NAME" dst)
+  # Remove the old unscoped rule if an earlier deployment left one behind.
+  remove_blocked_dest_rule filter FORWARD "${match[@]}" -j REJECT || return 1
+  if [[ "$BLOCKED_DEST_ACTIVE" == 1 ]]; then
+    iptables_insert_once filter FORWARD -i "$WG_INTERFACE" "${match[@]}" -j REJECT || return 1
+    if ipt -t mangle -nL "$RELAY_MARK_CHAIN" >/dev/null 2>&1; then
+      iptables_insert_once mangle "$RELAY_MARK_CHAIN" "${match[@]}" -j RETURN || return 1
+    fi
+  else
+    remove_blocked_dest_rule mangle "$RELAY_MARK_CHAIN" "${match[@]}" -j RETURN || return 1
+    remove_blocked_dest_rule filter FORWARD -i "$WG_INTERFACE" "${match[@]}" -j REJECT || return 1
+  fi
+}
+
 sync_blocked_dest_ipset() {
-  local tmp_set="${BLOCKED_DEST_IPSET_NAME}_next"
+  local tmp_set="${BLOCKED_DEST_IPSET_NAME}_next" ip entries
+  BLOCKED_DEST_ACTIVE=0
+  if [[ "$BLOCKED_DEST_ENABLED" != 1 ]]; then
+    apply_blocked_dest_rules
+    return
+  fi
+  entries="$(fetch_blocked_dest_ips)"
+  if [[ -z "$entries" ]]; then
+    apply_blocked_dest_rules
+    return
+  fi
 
-  ips create "$BLOCKED_DEST_IPSET_NAME" hash:net -exist
-  ips create "$tmp_set" hash:net -exist
-  ips flush "$tmp_set"
-
+  ips create "$BLOCKED_DEST_IPSET_NAME" hash:net -exist || return 1
+  ips create "$tmp_set" hash:net -exist || return 1
+  ips flush "$tmp_set" || return 1
   while IFS= read -r ip; do
-    if [[ -n "$ip" ]] && ! ips add "$tmp_set" "$ip" -exist 2>/dev/null; then
+    if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$ ]] &&
+        ips add "$tmp_set" "$ip" -exist 2>/dev/null; then
+      BLOCKED_DEST_ACTIVE=1
+    else
       echo "wg-captive-agent: skip invalid blocked destination: $ip" >&2
     fi
-  done < <(fetch_blocked_dest_ips)
+  done <<< "$entries"
 
-  ips swap "$tmp_set" "$BLOCKED_DEST_IPSET_NAME"
+  ips swap "$tmp_set" "$BLOCKED_DEST_IPSET_NAME" || return 1
   ips destroy "$tmp_set" >/dev/null 2>&1 || true
+  apply_blocked_dest_rules
 }
 
 cleanup() {
@@ -784,7 +821,11 @@ sync_once() {
   ensure_tools
   ensure_firewall
   sync_ipset
-  sync_blocked_dest_ipset
+  (
+    relay_acquire_lock sync || exit "$?"
+    db_load_runtime_config
+    sync_blocked_dest_ipset
+  )
 }
 
 run_loop() {
@@ -872,6 +913,12 @@ main() {
     relay-restore)
       require_root
       relay_restore
+      ;;
+    relay-reality-test)
+      [[ "$RELAY_PROTOCOL" == reality ]] && relay_tunnel_ready || die "start Xray first"
+      local trace
+      trace="$(relay_exec "curl --fail --silent --show-error --max-time 8 --noproxy '' --socks5-hostname 127.0.0.1:51824 https://www.cloudflare.com/cdn-cgi/trace")" || return 1
+      grep -E '^ip=[0-9a-fA-F:.]+$' <<< "$trace"
       ;;
     relay-status)
       relay_status

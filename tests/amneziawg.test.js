@@ -7,7 +7,7 @@ const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 const { normalizeAmneziaConfig, relayProtocol } = require("../web/relay-config");
 const { runtimeConfig } = require("../web/amnezia-config");
-const { adminFixture, ovpn, wg } = require("./relay.test");
+const { adminFixture, wg } = require("./relay.test");
 const key = Buffer.alloc(32, 7).toString("base64");
 const awg = `[Interface]\nPrivateKey = ${key}\nAddress = 10.42.0.2/32\nDNS = 1.1.1.1\nTable = auto\nPostUp = touch /tmp/must-not-run\nSaveConfig = true\nJc = 4\nJmin = 40\nJmax = 70\nS1 = 64\nS2 = 40\nS3 = 20\nS4 = 16\nH1 = 100-200\nH2 = 300\nH3 = 400\nH4 = 500\nI1 = <b 0x010203>\n[Peer]\nPublicKey = ${key}\nPresharedKey = ${key}\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = exit.example.com:51820\n`;
 module.exports = { awg };
@@ -53,7 +53,6 @@ test("AWG profile is independent, protects active service and survives backup/mi
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "awg-test-"));
   try {
     const fixture = adminFixture(dir), { api } = fixture;
-    await api.importRelayConf(api.loadConfig(), ovpn, "openvpn");
     await api.importRelayConf(api.loadConfig(), awg, "amneziawg");
     const db = new DatabaseSync(fixture.dbPath);
     db.exec("UPDATE relay_config SET protocol='amneziawg'");
@@ -71,7 +70,6 @@ test("AWG profile is independent, protects active service and survives backup/mi
     await api.restoreBackup(config, fs.readFileSync(backup.path));
     assert.equal(api.loadConfig().RELAY_PROTOCOL, "amneziawg");
     assert.equal(fs.readFileSync(config.RELAY_AMNEZIAWG_CONF, "utf8"), saved);
-    assert.equal(api.relayStatus(api.loadConfig()).profiles.openvpn.imported, true);
     await api.runRelayAction("relay-select", "amneziawg");
     assert.deepEqual(Array.from(fixture.commands.at(-1).args), ["relay-select", "amneziawg"]);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }

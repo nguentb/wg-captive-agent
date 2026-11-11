@@ -20,8 +20,8 @@ db_write_relay_conf() { :; }
 awg() { :; }
 awg-quick() { :; }
 amneziawg-go() { :; }
-openvpn() { :; }
-for RELAY_PROTOCOL in amneziawg openvpn; do
+XRAY_BIN=/bin/bash
+for RELAY_PROTOCOL in amneziawg reality; do
   if relay_tunnel_up > "$test_dir/log" 2>&1; then echo 'failed service start accepted' >&2; exit 1; fi
   if relay_tunnel_down > "$test_dir/log" 2>&1; then echo 'failed service stop accepted' >&2; exit 1; fi
 done

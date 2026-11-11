@@ -8,10 +8,11 @@ AUTO_SELECT_FAMILY="$(node -p 'require("node:net").getDefaultAutoSelectFamily() 
 [[ "$AUTO_SELECT_FAMILY" == "true" ]] || { echo "Node.js autoSelectFamily must be true; current value is ${AUTO_SELECT_FAMILY}." >&2; exit 1; }
 node --check web/wg-captive-admin.js
 node --check web/relay-config.js
-node --check web/openvpn-state.js
+node --check web/reality-config.js
+bash -n bin/wg-captive-reality
 node --check web/amnezia-config.js
 node --check web/relay-probe.js
-for script in bin/wg-captive-agent bin/wg-captive-redirect bin/wg-captive-openvpn bin/wg-captive-amneziawg bin/wg-captive-watchdog scripts/install-amneziawg.sh scripts/remove-legacy-xray.sh; do
+for script in bin/wg-captive-agent bin/wg-captive-redirect bin/wg-captive-amneziawg bin/wg-captive-watchdog scripts/install-amneziawg.sh scripts/remove-legacy-xray.sh scripts/remove-legacy-openvpn.sh; do
   bash -n "$script"
 done
 
@@ -21,16 +22,6 @@ case "${WG_CAPTIVE_AWG_MODE:-kernel}" in
   skip) echo 'Skipping AWG dependency installation (WG_CAPTIVE_AWG_MODE=skip)' ;;
   *) echo 'WG_CAPTIVE_AWG_MODE must be kernel, go or skip' >&2; exit 1 ;;
 esac
-
-if ! command -v openvpn >/dev/null 2>&1; then
-  if command -v apt-get >/dev/null 2>&1; then
-    apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y openvpn
-  else
-    echo "OpenVPN 2.6+ is required for TCP relay. Install openvpn first." >&2
-    exit 1
-  fi
-fi
 
 if ! command -v sqlite3 >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
@@ -65,11 +56,12 @@ chmod 0600 /etc/wg-captive-agent.env
 
 # Normalize old env quoting before the previous agent sources it during cleanup.
 systemctl stop wg-captive-watchdog.timer wg-captive-watchdog.service 2>/dev/null || true
+bash scripts/remove-legacy-openvpn.sh
 bash scripts/remove-legacy-xray.sh
 install -m 0755 bin/wg-captive-agent /usr/local/sbin/wg-captive-agent
 install -m 0755 bin/wg-captive-redirect /usr/local/sbin/wg-captive-redirect
-install -m 0755 bin/wg-captive-openvpn /usr/local/sbin/wg-captive-openvpn
 install -m 0755 bin/wg-captive-amneziawg /usr/local/sbin/wg-captive-amneziawg
+install -m 0755 bin/wg-captive-reality /usr/local/sbin/wg-captive-reality
 install -m 0755 bin/wg-captive-watchdog /usr/local/sbin/wg-captive-watchdog
 install -m 0755 scripts/install-amneziawg.sh /usr/local/bin/wg-captive-install-amneziawg
 install -m 0755 scripts/wg-captive-update /usr/local/bin/wg-captive-update
@@ -83,7 +75,7 @@ install -d -m 0755 /var/backups/wg-captive
 install -d -m 0755 /var/lib/wg-captive-agent
 install -m 0755 web/wg-captive-admin.js /usr/local/lib/wg-captive-agent/wg-captive-admin.js
 install -m 0644 web/relay-config.js /usr/local/lib/wg-captive-agent/relay-config.js
-install -m 0644 web/openvpn-state.js /usr/local/lib/wg-captive-agent/openvpn-state.js
+install -m 0644 web/reality-config.js /usr/local/lib/wg-captive-agent/reality-config.js
 install -m 0644 web/amnezia-config.js /usr/local/lib/wg-captive-agent/amnezia-config.js
 install -m 0644 web/relay-probe.js /usr/local/lib/wg-captive-agent/relay-probe.js
 
@@ -95,8 +87,8 @@ install -m 0644 systemd/wg-captive-agent.service /etc/systemd/system/wg-captive-
 install -m 0644 systemd/wg-captive-admin.service /etc/systemd/system/wg-captive-admin.service
 install -m 0644 systemd/wg-captive-redirect.service /etc/systemd/system/wg-captive-redirect.service
 install -m 0644 systemd/wg-captive-relay-restore.service /etc/systemd/system/wg-captive-relay-restore.service
-install -m 0644 systemd/wg-captive-openvpn.service /etc/systemd/system/wg-captive-openvpn.service
 install -m 0644 systemd/wg-captive-amneziawg.service /etc/systemd/system/wg-captive-amneziawg.service
+install -m 0644 systemd/wg-captive-reality.service /etc/systemd/system/wg-captive-reality.service
 install -m 0644 systemd/wg-captive-watchdog.service /etc/systemd/system/wg-captive-watchdog.service
 install -m 0644 systemd/wg-captive-watchdog.timer /etc/systemd/system/wg-captive-watchdog.timer
 

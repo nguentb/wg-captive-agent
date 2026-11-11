@@ -1,0 +1,13 @@
+[Unit]
+Description=Captive relay Xray REALITY
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/wg-captive-reality
+RuntimeDirectory=wg-captive-reality
+RuntimeDirectoryMode=0700
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=5

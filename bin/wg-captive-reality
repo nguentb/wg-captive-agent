@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+CONFIG_FILE="${CONFIG_FILE:-/etc/wg-captive-agent.env}"
+[[ ! -f "$CONFIG_FILE" ]] || source "$CONFIG_FILE"
+STATE_DB="${STATE_DB:-/etc/wg-captive-agent.db}"
+XRAY_BIN="${XRAY_BIN:-/usr/local/bin/xray}"
+helper=/usr/local/lib/wg-captive-agent/reality-config.js
+runtime=/run/wg-captive-reality/client.json
+[[ "$(sqlite3 "$STATE_DB" 'SELECT protocol FROM relay_config WHERE id=1')" == reality ]] || exit 1
+conf="$(sqlite3 "$STATE_DB" 'SELECT reality_conf_path FROM relay_config WHERE id=1')"
+endpoint="$(node "$helper" endpoint "$conf")"
+# Resolve before entering wg-easy's network namespace.
+if [[ "$endpoint" == *:* ]]; then
+  address="$endpoint"
+else
+  address="$(getent ahostsv4 "$endpoint" | awk 'NR==1 {print $1}')"
+fi
+[[ -n "$address" ]] || { echo 'Cannot resolve Xray endpoint' >&2; exit 1; }
+umask 077
+node "$helper" runtime "$conf" "$address" > "$runtime"
+prefix=()
+pid=""
+if [[ -n "${WG_EASY_CONTAINER:-}" && "$WG_EASY_CONTAINER" != host ]]; then
+  pid="$(docker inspect -f '{{.State.Pid}}' "$WG_EASY_CONTAINER")"
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || exit 1
+  prefix=(nsenter -t "$pid" -n)
+fi
+"${prefix[@]}" "$XRAY_BIN" run -config "$runtime" &
+child=$!
+sleep_pid=""
+cleanup() {
+  if [[ -n "$sleep_pid" ]]; then kill "$sleep_pid" 2>/dev/null || true; fi
+  kill "$child" 2>/dev/null || true
+  wait "$child" 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 0' TERM INT
+restored=0
+seen_tun=0
+route_flag="${RELAY_ROUTE_FLAG:-/etc/wg-captive-relay.enabled}"
+while kill -0 "$child" 2>/dev/null; do
+  if [[ -n "$pid" ]]; then
+    [[ "$(docker inspect -f '{{.State.Pid}}' "$WG_EASY_CONTAINER")" == "$pid" ]] || exit 1
+  fi
+  if "${prefix[@]}" ip link show dev xray-exit up | grep -q .; then
+    seen_tun=1
+    if [[ "$restored" == 0 && -f "$route_flag" ]] &&
+        "${AGENT_BIN:-/usr/local/sbin/wg-captive-agent}" relay-reapply; then restored=1; fi
+  elif [[ "$seen_tun" == 1 ]]; then
+    exit 1
+  fi
+  sleep 3 &
+  sleep_pid=$!
+  wait "$sleep_pid" || true
+  sleep_pid=""
+done
+exit 1

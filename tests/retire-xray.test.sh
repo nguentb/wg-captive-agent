@@ -28,7 +28,7 @@ grep -qF "protocol='wireguard', enabled=0" "$MIGRATION_LOG"
 grep -qF 'systemctl stop wg-captive-xray.service' "$MIGRATION_LOG"
 if grep '^remove ' "$MIGRATION_LOG" | grep -qE 'exit.json|agent.env|state.db|openvpn|wg-easy'; then echo 'migration deletes unrelated state' >&2; exit 1; fi
 printf '' > "$MIGRATION_LOG"
-test_protocol=openvpn
+test_protocol=amneziawg
 retire_legacy_xray
 if grep -qE '^agent |^database ' "$MIGRATION_LOG"; then echo 'migration touched active supported relay' >&2; exit 1; fi
 printf '' > "$MIGRATION_LOG"
